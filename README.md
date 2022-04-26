@@ -8,3 +8,4 @@
 * npx hardhat node --fork https://eth-mainnet.alchemyapi.io/v2/qGjxzsFlzCxPTmcDhuHmqy24SI7yGcsu
 * запуск форкнутой мейннет npx hardhat node --network hardhat
 * запуск скрипта на форкнутой ноде npx hardhat run scripts/task.js --network localhost
+* запуск ремикса онлайн cd .. => remixd -s Vault/

@@ -17,5 +17,9 @@
     "ethereum-waffle": "^3.4.0",
     "ethers": "^5.5.4",
     "hardhat": "^2.8.4"
+  },
+  "dependencies": {
+    "@uniswap/v3-periphery": "^1.4.0",
+    "hardhat-safe-deployer": "github://rmeissner/hardhat-safe-deployer"
   }
 }

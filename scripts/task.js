@@ -11,7 +11,7 @@ async function main() {
   const Deploy0= await hre.ethers.getContractFactory("Counter");
   const deploy0 = await Deploy0.deploy("0xB3f5503f93d5Ef84b06993a1975B9D21B962892F");
   await deploy0.startTask();
-  const COUNTER = deploy0.address;
+  const COUNTER = deploy0.address;-
   // const Deploy1= await hre.ethers.getContractFactory("CounterResolver");
   // const deplo2 = await Deploy1.deploy(COUNTER);
   // const RESOLVER = deploy1.address;

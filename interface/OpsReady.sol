@@ -21,8 +21,6 @@ abstract contract OpsReady {
     }
 
     constructor(address _ops) {
-        console.log('ops', _ops);
-        console.log('gelato', IOps(_ops).gelato());
         ops = _ops;
         gelato = IOps(_ops).gelato();
     }

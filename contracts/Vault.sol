@@ -3,10 +3,12 @@ pragma solidity 0.8.10;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import '../interface/VaultInterface.sol';
+import '../interface/IVault.sol';
+import '../interface/IStrategy.sol';
+import "hardhat/console.sol";
 
 
-contract Vault is ERC20, VaultInterface {
+contract Vault is ERC20, IVault {
     using SafeERC20 for ERC20;
     uint256 public totalDebt;
     uint256 public managementFee;
@@ -14,20 +16,21 @@ contract Vault is ERC20, VaultInterface {
     address public governance;
     address public rewards;
     // uint256 public debtRatio;  // Debt ratio for the Vault across all strategies (in BPS, <= 10k)
-    ERC20 public  immutable asset;
+    ERC20 public immutable asset;
+    IStrategy public strategy;
+    uint256 constant SECS_PER_YEAR = 31556952;
+    uint256 constant feeDecimals = 4;
+    uint256 lastReport; 
 
     struct StrategyParams {
         uint256 performanceFee;
         uint256 activation;
-        // uint256 debtRatio;
-        // uint256 minDebtPerHarvest;
-        // uint256 maxDebtPerHarvest;
         uint256 lastReport;
         uint256 totalDebt;
         uint256 totalGain;
         uint256 totalLoss;
     }
-    mapping (address => StrategyParams) public strategies;
+    mapping (address => StrategyParams) public strategies; 
 
     event Deposit(address indexed caller, address indexed owner, uint256 assets, uint256 shares);
     event Withdraw(
@@ -35,7 +38,8 @@ contract Vault is ERC20, VaultInterface {
         address indexed receiver,
         address indexed owner,
         uint256 assets,
-        uint256 shares
+        uint256 shares,
+        uint256 loss
     );
 
     constructor(
@@ -60,6 +64,27 @@ contract Vault is ERC20, VaultInterface {
         performanceFee = 200;
     }
 
+
+    function _assessFee(address _strategy, uint256 gain) internal returns (uint256) {
+        if (strategies[_strategy].activation == block.timestamp || gain == 0) {
+            return 0;
+        }
+        uint256 duration = block.timestamp - strategies[_strategy].lastReport;
+        assert(duration != 0);
+        uint256 management_fee = ((strategies[_strategy].totalDebt - ((strategies[_strategy].totalDebt * (10**feeDecimals - managementFee) ) / (10**feeDecimals))) / SECS_PER_YEAR) * duration;
+
+        uint256 performance_fee = gain - ((gain * (10**feeDecimals - performanceFee)) / (10**feeDecimals));
+        uint256 total_fee = performance_fee + management_fee;
+        if (total_fee > gain) {
+            total_fee = gain;
+        }
+        if (total_fee > 0) {
+            uint shares = convertToShares(total_fee);
+            _mint(governance, shares);
+        }
+        return total_fee;
+    }
+
     function addStrategy(
         address _strategy,
         // uint256 _debtRatio,
@@ -80,26 +105,34 @@ contract Vault is ERC20, VaultInterface {
             totalGain: 0,
             totalLoss: 0
         });
-        // debtRatio += _debtRatio;
+        strategy = IStrategy(_strategy);
     }
 
     function totalAssets() public view  returns (uint256) {
         return asset.balanceOf(address(this)) + totalDebt;
     }
 
-    function debtOutstanding(address strategy) public view returns (uint256){
-        return strategies[strategy].totalDebt;
+    function debtOutstanding(address _strategy) public view returns (uint256){
+        return strategies[_strategy].totalDebt;
     }
 
     function creditAvailable() external view returns (uint256) {
         return asset.balanceOf(address(this));
     }
-    //возвращает количество свободных средств для использования стратегии в реинвестировании
-    //перфоманс комиссия взымается в случае прибыли от стратегии
+
+    function reportWithdraw(address _strategy, uint256 _assetsAmount, uint256 _profit) external {
+        console.log('lastRp', strategies[msg.sender].lastReport, block.timestamp);
+        if (_profit > 0) {
+            _assessFee(_strategy, _profit);
+        }
+        strategies[_strategy].totalDebt += _assetsAmount;
+    }
+
     function report (uint256 gain,  uint256 loss) external returns (uint256){
 
         uint256 credit = asset.balanceOf(address(this));
-
+        console.log('credit', credit);
+        
         if (credit > 0) {
             asset.safeTransfer(msg.sender, credit);
             strategies[msg.sender].totalDebt += credit;
@@ -109,13 +142,15 @@ contract Vault is ERC20, VaultInterface {
         if (gain > 0) {
             strategies[msg.sender].totalGain += gain;
             totalDebt += gain;
+            _assessFee(msg.sender, gain);
         }
 
         if (loss > 0) {
             strategies[msg.sender].totalLoss += loss;
             totalDebt -= loss;
         }
-
+        strategies[msg.sender].lastReport = block.timestamp;
+        lastReport = block.timestamp;
         return debtOutstanding(msg.sender);
 
     }
@@ -136,9 +171,22 @@ contract Vault is ERC20, VaultInterface {
         uint256 assets,
         address receiver,
         address owner
-    ) public virtual returns (uint256 shares) {
-        shares = convertToShares(assets); // No need to check for rounding error, previewWithdraw rounds up.
+    ) public virtual returns (uint256 shares, uint256 loss) {
+        assert(assets > 0);
+        uint256 withdrawingAssets;
+        shares = convertToShares(assets); 
+        uint256 currentBalanceVault = asset.balanceOf(address(this));
 
+        if (currentBalanceVault < assets) {
+
+            uint256 amountNeeded = assets - currentBalanceVault;
+            bool redeemType = false;
+ 
+            (loss, withdrawingAssets) = IStrategy(strategy).withdraw(amountNeeded, redeemType);  
+            console.log(loss,'freed', withdrawingAssets);
+        } else {
+            withdrawingAssets = assets;
+        }
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
         }
@@ -147,30 +195,37 @@ contract Vault is ERC20, VaultInterface {
 
         _burn(owner, shares);
 
-        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        emit Withdraw(msg.sender, receiver, owner, withdrawingAssets, shares, loss);
 
-        asset.safeTransfer(receiver, assets);
+        asset.safeTransfer(receiver, withdrawingAssets);
     }
 
     function redeem(
         uint256 shares,
         address receiver,
         address owner
-    ) public virtual returns (uint256 assets) {
+    ) public virtual returns (uint256 assets, uint256 loss) {
+        uint256 withdrawingAssets;
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
         }
+        assert(shares > 0);
+        assets = convertToAssets(shares);
+        uint256 currentBalanceVault = asset.balanceOf(address(this));
 
-        // Check for rounding error since we round down in previewRedeem.
-        // require((assets = previewRedeem(shares)) != 0, "ZERO_ASSETS");
-
-        // beforeWithdraw(assets, shares);
+        if (currentBalanceVault < assets) {
+            uint256 amountNeeded = assets - currentBalanceVault;
+            bool redeemType = true;
+            (loss, withdrawingAssets) = IStrategy(strategy).withdraw(amountNeeded, redeemType);  
+        } else {
+            withdrawingAssets = assets;
+        }
 
         _burn(owner, shares);
 
-        emit Withdraw(msg.sender, receiver, owner, assets, shares);
+        emit Withdraw(msg.sender, receiver, owner, assets, shares, loss);
 
-        asset.safeTransfer(receiver, assets);
+        asset.safeTransfer(receiver, withdrawingAssets);
     }
 
     function convertToShares(uint256 assets) public view virtual returns (uint256) {
