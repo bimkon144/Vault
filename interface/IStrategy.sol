@@ -2,7 +2,7 @@
 pragma solidity 0.8.10;
 
 interface IStrategy {
-    function name() external view returns (string memory);
+    function strategyName() external view returns (string memory);
 
     function harvest() external returns (uint);
 
@@ -11,6 +11,10 @@ interface IStrategy {
     function lastExecuted() external view returns (uint256);
 
     function reportDelay() external view returns (uint256);
+
+    function emergencyExit() external view returns (bool);
+    
+    function strategyPause() external view returns (bool);
 
 
 }

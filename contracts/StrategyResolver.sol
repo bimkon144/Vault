@@ -22,9 +22,11 @@ contract StrategyResolver is OpsReady {
     {
         uint256 lastExecuted = IStrategy(strategy).lastExecuted();
         uint256 reportDelay = IStrategy(strategy).reportDelay();
+        bool emergencyExit = IStrategy(strategy).emergencyExit();
+        bool strategyPause = IStrategy(strategy).strategyPause();
 
         canExec = (block.timestamp - lastExecuted) > reportDelay;
-
+        if (emergencyExit || strategyPause) canExec = false;
         execPayload = abi.encodeWithSelector(IStrategy.harvest.selector);
     }
 

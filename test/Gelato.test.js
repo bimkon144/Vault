@@ -52,7 +52,7 @@ describe("Gelato", () => {
         comp = new ethers.Contract(compAddress, abi1, owner);
 
         const Vault = await ethers.getContractFactory("Vault");
-        vault = await Vault.deploy("SharedToken", "STK", owner.address, owner.address, underlyingAddress);
+        vault = await Vault.deploy("SharedToken", "STK", owner.address, underlyingAddress);
         await vault.deployed();
 
         const Strategy = await ethers.getContractFactory("Stratery");

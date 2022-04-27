@@ -46,10 +46,10 @@ describe("Strategy", () => {
 
       compAddress = '0xc00e94Cb662C3520282E6f5717214004A7f26888';
       const abi2 = require('../contracts/abi/Comp.json');
-      comp = new ethers.Contract(compAddress, abi1, owner);
+      comp = new ethers.Contract(compAddress, abi2, owner);
 
       const Vault = await ethers.getContractFactory("Vault");
-      vault = await Vault.deploy("SharedToken", "STK", owner.address, owner.address, underlyingAddress);
+      vault = await Vault.deploy("SharedToken", "STK", owner.address, underlyingAddress);
       await vault.deployed();
       const Strategy = await ethers.getContractFactory("Stratery");
       strategy = await Strategy.deploy(vault.address, "DaiFarming", owner.address);
@@ -107,11 +107,11 @@ describe("Strategy", () => {
         expect(+cTokenBalance / 1e8).to.equal(455.42830343);
         // await strategy.prepareReturn();
         // expect(await strategy.balanceOfComp() / 1e18).to.equal(2.04928259e-10);
-        const balanceOfComp = await strategy.balanceOfComp();
+        const balanceOfComp = await comp.balanceOf(strategy.address);
         // expect(balanceOfComp).to.equal(204928259);
         expect(await underlying.balanceOf(strategy.address)).to.equal(0);
         // await strategy.swapExactInputSingle(balanceOfComp);
-        expect(await strategy.balanceOfComp() / 1e18).to.equal(0);
+        expect(await comp.balanceOf(strategy.address) / 1e18).to.equal(0);
         // expect(await underlying.balanceOf(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(1.01869262e-10);
         expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10);
         await strategy.harvest();

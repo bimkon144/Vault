@@ -13,4 +13,6 @@ interface CErc20 {
     function redeemUnderlying(uint) external returns (uint);
     
     function balanceOfUnderlying(address owner) external returns (uint);
+
+    function balanceOf(address account) external view returns (uint);
 }
