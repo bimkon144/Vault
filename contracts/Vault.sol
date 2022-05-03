@@ -47,6 +47,8 @@ contract Vault is ERC20, IVault {
         uint256 loss
     );
 
+    event StrategyMigrated(address oldVersion, address newVersion);
+
     modifier onlyGovernance() {
         require(msg.sender == governance);
         _;
@@ -71,6 +73,32 @@ contract Vault is ERC20, IVault {
     function setEmergencyShutdown(bool _active) external onlyGovernance {
         emergencyShutdown = _active;
         emit emergencyShutdownEnabled(_active);
+    }
+
+    function migrateStrategy(address oldVersion, address newVersion)
+        external
+        onlyGovernance
+    {
+        require(newVersion != address(0));
+        assert(
+            strategies[oldVersion].activation > 0 &&
+                strategies[newVersion].activation == 0
+        );
+        StrategyParams memory oldStrategy = strategies[oldVersion];
+
+        strategies[newVersion] = StrategyParams({
+            performanceFee: oldStrategy.performanceFee,
+            activation: block.timestamp,
+            lastReport: oldStrategy.lastReport,
+            totalDebt: oldStrategy.totalDebt,
+            totalGain: 0,
+            totalLoss: 0
+        });
+
+        strategy = IStrategy(newVersion);
+        IStrategy(oldVersion).migrate(newVersion);
+
+        emit StrategyMigrated(oldVersion, newVersion);
     }
 
     function addStrategy(address _strategy, uint256 _performanceFee) external {

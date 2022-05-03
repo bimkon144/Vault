@@ -5,9 +5,9 @@ async function main() {
 
   console.log("Account balance:", (await deployer.getBalance()).toString());
 
-  const MyContract = await ethers.getContractFactory("MyContract");
-  const myContract = await MyContract.deploy();
-
+  const MyContract = await ethers.getContractFactory("Stratery");
+  const myContract = await MyContract.getDeployTransaction();
+  console.log(myContract.data);
   console.log("MyContract address:", myContract.address);
 }
 

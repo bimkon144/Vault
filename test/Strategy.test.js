@@ -51,7 +51,7 @@ describe("Strategy", () => {
       const Vault = await ethers.getContractFactory("Vault");
       vault = await Vault.deploy("SharedToken", "STK", owner.address, underlyingAddress);
       await vault.deployed();
-      const Strategy = await ethers.getContractFactory("Stratery");
+      const Strategy = await ethers.getContractFactory("Strategy");
       strategy = await Strategy.deploy(vault.address, "DaiFarming", owner.address);
       await strategy.deployed();
       await vault.addStrategy(strategy.address, 1000);
@@ -135,26 +135,4 @@ describe("Strategy", () => {
 
     })
 
-    // describe("setRegistry", async () => {
-    //   it("set registry address", async () => {
-    //     await factory.setRegistry(registry.address);
-    //     expect(await factory.registry()).to.equal(registry.address);
-    //   });
-    // })
-
-    // describe("setFeeContract", async () => {
-    //   it("set feeContract address", async () => {
-    //     await factory.setFeeContract(feeParameters.address);
-    //     expect(await factory.feeContract()).to.equal(feeParameters.address);
-    //   });
-    // })
-
-    // describe("createPair", async () => {
-    //   it("create pair", async () => {
-    //     await factory.setRegistry(registry.address);
-    //     await factory.createPair(token0.address, token1.address);
-    //     expect(await registry.getAddressOfPair(token0.address, token1.address) == 0).to.equal(false);
-    //   });
-    // })
-  
   });

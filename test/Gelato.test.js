@@ -55,7 +55,7 @@ describe("Gelato", () => {
         vault = await Vault.deploy("SharedToken", "STK", owner.address, underlyingAddress);
         await vault.deployed();
 
-        const Strategy = await ethers.getContractFactory("Stratery");
+        const Strategy = await ethers.getContractFactory("Strategy");
         strategy = await Strategy.deploy(vault.address, "DaiFarming", owner.address);
         await strategy.deployed();
         await vault.addStrategy(strategy.address, 1000);

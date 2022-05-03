@@ -13,7 +13,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "hardhat/console.sol";
 
-contract Stratery is IStrategy {
+contract Strategy is IStrategy {
     using SafeERC20 for IERC20;
     string public strategyName;
     address public strategist;
@@ -42,7 +42,9 @@ contract Stratery is IStrategy {
 
     event EmergencyExitEnabled();
 
-    event strategyPauseEnabled();
+    event strategyPauseEnabled(uint256 freedAmount);
+
+    event strategyPauseDisabled(uint256 mintedAmount);
 
     modifier onlyAuthorized() {
         require(msg.sender == strategist || msg.sender == vault.governance());
@@ -114,10 +116,31 @@ contract Stratery is IStrategy {
         liquidateAllPositions();
         emit EmergencyExitEnabled();
     }
-    function setStrategyPause() external onlyAuthorized {
-        strategyPause = true;
-        sendAllAssetsToStrategy();
-        emit strategyPauseEnabled();
+
+    function toggleStrategyPause() public onlyAuthorized {
+        strategyPause = !strategyPause;
+        if (strategyPause) {
+            uint256 amountFreed = sendAllAssetsToStrategy();
+            emit strategyPauseEnabled(amountFreed);
+        } else {
+            uint256 mintedCTokensAmount = adjustPosition(
+                want.balanceOf(address(this))
+            );
+            emit strategyPauseDisabled(mintedCTokensAmount);
+        }
+    }
+
+    function migrate(address _newStrategy) external {
+        require(msg.sender == address(vault));
+        require(IStrategy(_newStrategy).vault() == vault);
+
+        toggleStrategyPause();
+
+        SafeERC20.safeTransfer(
+            want,
+            _newStrategy,
+            want.balanceOf(address(this))
+        );
     }
 
     function harvest() external returns (uint256) {
@@ -143,11 +166,11 @@ contract Stratery is IStrategy {
         onlyAuthorized
         returns (uint256 _amountFreed)
     {
-         _amountFreed = sendAllAssetsToStrategy();
+        _amountFreed = sendAllAssetsToStrategy();
         want.safeTransfer(vault.governance(), _amountFreed);
     }
 
-    function sendAllAssetsToStrategy () internal returns (uint256 _amountFreed) {
+    function sendAllAssetsToStrategy() internal returns (uint256 _amountFreed) {
         cToken.redeem(cToken.balanceOf(address(this)));
         uint256 amountOfCompToken = claimComps(address(this));
         uint256 amountOut = swapExactInputSingle(amountOfCompToken);
@@ -209,8 +232,12 @@ contract Stratery is IStrategy {
         amountOut = swapRouter.exactInputSingle(params);
     }
 
-    function adjustPosition(uint256 _debtOutstanding) internal {
+    function adjustPosition(uint256 _debtOutstanding)
+        internal
+        returns (uint256 mintedTokens)
+    {
         supplyErc20ToCompound(address(want), address(cToken), _debtOutstanding);
+        mintedTokens = cToken.balanceOf(address(this));
     }
 
     function supplyErc20ToCompound(
