@@ -15,22 +15,23 @@ import "hardhat/console.sol";
 
 contract Strategy is IStrategy {
     using SafeERC20 for IERC20;
-    string public strategyName;
-    address public strategist;
-    address public rewards;
-    address public keeper;
     CErc20 public cToken;
     IComp public compToken;
     IERC20 public want;
     IComptroller public compTroller;
     IVault public vault;
     ISwapRouter public swapRouter;
+    string public strategyName;
+    address public strategist;
+    address public rewards;
+    address public keeper;
     uint24 public constant poolFee = 3000;
     uint256 public totalRewards = 0;
     uint256 public lastExecuted = 0;
     uint256 public reportDelay = 86400;
-    bool public emergencyExit;
+    bool public emergencyExit;  
     bool public strategyPause;
+
 
     event UpdatedStrategist(address newStrategist);
 
@@ -40,11 +41,21 @@ contract Strategy is IStrategy {
 
     event Harvested(uint256 profit, uint256 loss, uint256 debtOutstanding);
 
+    event LiquidatedAllPositions(uint256 amountFreed);
+
+    event LiquidatedPositionAmount(uint256 amountFreed);
+
     event EmergencyExitEnabled();
 
-    event strategyPauseEnabled(uint256 freedAmount);
+    event StrategyPauseToggled(uint256 freedAmount);
 
-    event strategyPauseDisabled(uint256 mintedAmount);
+    event ClaimedCompTokensAmount(uint256 claimedCompAmount);
+
+    event SwappedCompToWantAmount(uint256 wantAmountOut);
+
+    event AdjustedPosition(uint256 _amountMinted);
+
+    event WithdrawedFromStrategy(address strategyAddress, uint256 amountWithdrawed);
 
     modifier onlyAuthorized() {
         require(msg.sender == strategist || msg.sender == vault.governance());
@@ -121,12 +132,12 @@ contract Strategy is IStrategy {
         strategyPause = !strategyPause;
         if (strategyPause) {
             uint256 amountFreed = sendAllAssetsToStrategy();
-            emit strategyPauseEnabled(amountFreed);
+            emit StrategyPauseToggled(amountFreed);
         } else {
             uint256 mintedCTokensAmount = adjustPosition(
                 want.balanceOf(address(this))
             );
-            emit strategyPauseDisabled(mintedCTokensAmount);
+            emit StrategyPauseToggled(mintedCTokensAmount);
         }
     }
 
@@ -168,6 +179,7 @@ contract Strategy is IStrategy {
     {
         _amountFreed = sendAllAssetsToStrategy();
         want.safeTransfer(vault.governance(), _amountFreed);
+        emit LiquidatedAllPositions(_amountFreed);
     }
 
     function sendAllAssetsToStrategy() internal returns (uint256 _amountFreed) {
@@ -200,6 +212,7 @@ contract Strategy is IStrategy {
 
     function claimComps(address holder) internal returns (uint256) {
         IComptroller(compTroller).claimComp(holder);
+        emit ClaimedCompTokensAmount(compToken.balanceOf(address(this)));
         return compToken.balanceOf(address(this));
     }
 
@@ -207,15 +220,13 @@ contract Strategy is IStrategy {
         internal
         returns (uint256 amountOut)
     {
-        // Approve the router to spend DAI.
         TransferHelper.safeApprove(
             address(compToken),
             address(swapRouter),
             amountIn
         );
 
-        // Naively set amountOutMinimum to 0. In production, use an oracle or other data source to choose a safer value for amountOutMinimum.
-        // We also set the sqrtPriceLimitx96 to be 0 to ensure we swap our exact input amount.
+  
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
             .ExactInputSingleParams({
                 tokenIn: address(compToken),
@@ -228,31 +239,24 @@ contract Strategy is IStrategy {
                 sqrtPriceLimitX96: 0
             });
 
-        // The call to `exactInputSingle` executes the swap.
         amountOut = swapRouter.exactInputSingle(params);
+        emit SwappedCompToWantAmount(amountOut);
     }
 
     function adjustPosition(uint256 _debtOutstanding)
         internal
         returns (uint256 mintedTokens)
     {
-        supplyErc20ToCompound(address(want), address(cToken), _debtOutstanding);
+        supplyErc20ToCompound(_debtOutstanding);
         mintedTokens = cToken.balanceOf(address(this));
+        emit AdjustedPosition(mintedTokens);
     }
 
     function supplyErc20ToCompound(
-        address _erc20Contract,
-        address _cErc20Contract,
         uint256 _numTokensToSupply
     ) internal returns (uint256) {
-        ERC20 underlying = ERC20(_erc20Contract);
-        CErc20 ceToken = CErc20(_cErc20Contract);
-
-        // Approve transfer on the ERC20 contract
-        underlying.approve(_cErc20Contract, _numTokensToSupply);
-
-        // Mint cTokens
-        uint256 mintResult = ceToken.mint(_numTokensToSupply);
+        want.approve(address(cToken), _numTokensToSupply);
+        uint256 mintResult = cToken.mint(_numTokensToSupply);
         return mintResult;
     }
 
@@ -269,21 +273,21 @@ contract Strategy is IStrategy {
             uint256 _profit;
             uint256 _loss;
             uint256 profitForUser;
-            uint256 totalAssets = cToken.balanceOfUnderlying(address(this));
-            uint256 totalDebt = vault.debtOutstanding(address(this));
-            if (totalAssets > totalDebt) {
-                _profit = totalAssets - totalDebt + totalRewards;
+            uint256 totalAssetsOnCompound = cToken.balanceOfUnderlying(address(this));
+            uint256 totalStrategyDebt = vault.debtOutstanding(address(this));
+            if (totalAssetsOnCompound > totalStrategyDebt) {
+                _profit = totalAssetsOnCompound - totalStrategyDebt + totalRewards;
             } else {
-                _loss = totalDebt - totalAssets;
+                _loss = totalStrategyDebt - totalAssetsOnCompound;
             }
 
             if (_profit > 0) {
-                profitForUser = (_amountNeeded * _profit) / totalAssets;
+                profitForUser = (_amountNeeded * _profit) / totalAssetsOnCompound;
             } else {
                 profitForUser = 0;
             }
             if (_loss > 0) {
-                lossForUser = (_amountNeeded * _loss) / totalAssets;
+                lossForUser = (_amountNeeded * _loss) / totalAssetsOnCompound;
             } else {
                 lossForUser = 0;
             }
@@ -293,6 +297,7 @@ contract Strategy is IStrategy {
             amountFreed = liquidatePosition(amountToFreed, typeOfRedeem);
             want.safeTransfer(msg.sender, amountFreed);
             vault.reportWithdraw(address(this), amountFreed, profitForUser);
+            emit WithdrawedFromStrategy(address(this), amountFreed);
         }
     }
 
@@ -303,30 +308,27 @@ contract Strategy is IStrategy {
     {
         bool liquidatedAmount = redeemCErc20Tokens(
             _amountNeeded,
-            typeOfRedeem,
-            address(cToken)
+            typeOfRedeem
         );
         if (liquidatedAmount) {
             _liquidatedAmount = want.balanceOf(address(this));
+            emit LiquidatedPositionAmount(_liquidatedAmount);
         }
     }
 
     function redeemCErc20Tokens(
         uint256 amount,
-        bool redeemType,
-        address _cErc20Contract
+        bool redeemType
     ) internal returns (bool) {
-        // Create a reference to the corresponding cToken contract, like cDAI
-        CErc20 ceToken = CErc20(_cErc20Contract);
 
         uint256 redeemResult;
 
         if (redeemType == true) {
             // Retrieve your asset based on a cToken amount
-            redeemResult = ceToken.redeem(amount);
+            redeemResult = cToken.redeem(amount);
         } else {
             // Retrieve your asset based on an amount of the asset
-            redeemResult = ceToken.redeemUnderlying(amount);
+            redeemResult = cToken.redeemUnderlying(amount);
         }
 
         return true;

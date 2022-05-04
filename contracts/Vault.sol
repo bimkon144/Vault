@@ -9,18 +9,18 @@ import "hardhat/console.sol";
 
 contract Vault is ERC20, IVault {
     using SafeERC20 for ERC20;
+    ERC20 public immutable asset;
+    IStrategy public strategy;
     uint256 public totalDebt;
     uint256 public managementFee;
     uint256 public performanceFee;
     address public governance;
-    ERC20 public immutable asset;
-    IStrategy public strategy;
     uint256 constant SECS_PER_YEAR = 31556952;
     uint256 constant feeDecimals = 4;
     uint256 lastReport;
     bool public emergencyShutdown;
 
-    event emergencyShutdownEnabled(bool active);
+    event emergencyShutdownEnabled(bool isActive);
 
     struct StrategyParams {
         uint256 performanceFee;
@@ -49,6 +49,21 @@ contract Vault is ERC20, IVault {
 
     event StrategyMigrated(address oldVersion, address newVersion);
 
+    event StrategyAdded(address strategy);
+
+    event StrategyReported(
+        address strategy,
+        uint256 gain,
+        uint256 loss,
+        uint256 credit
+    );
+
+    event ReportedWithdrawFromStrategy(
+        address strategy,
+        uint256 amount,
+        uint256 profit
+    );
+
     modifier onlyGovernance() {
         require(msg.sender == governance);
         _;
@@ -73,6 +88,42 @@ contract Vault is ERC20, IVault {
     function setEmergencyShutdown(bool _active) external onlyGovernance {
         emergencyShutdown = _active;
         emit emergencyShutdownEnabled(_active);
+    }
+
+    function convertToShares(uint256 assets) public view returns (uint256) {
+        uint256 supply = totalSupply();
+
+        return supply == 0 ? assets : (assets * supply) / totalAssets();
+    }
+
+    function convertToAssets(uint256 shares) public view returns (uint256) {
+        uint256 supply = totalSupply();
+
+        return supply == 0 ? shares : (shares * totalAssets()) / supply;
+    }
+
+    function maxDeposit(address) public view virtual returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function previewDeposit(uint256 assets) public view returns (uint256) {
+        return convertToShares(assets);
+    }
+
+    function maxMint(address) public view virtual returns (uint256) {
+        return type(uint256).max;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return asset.balanceOf(address(this)) + totalDebt;
+    }
+
+    function debtOutstanding(address _strategy) public view returns (uint256) {
+        return strategies[_strategy].totalDebt;
+    }
+
+    function creditAvailable() external view returns (uint256) {
+        return asset.balanceOf(address(this));
     }
 
     function migrateStrategy(address oldVersion, address newVersion)
@@ -112,6 +163,7 @@ contract Vault is ERC20, IVault {
             totalLoss: 0
         });
         strategy = IStrategy(_strategy);
+        emit StrategyAdded(_strategy);
     }
 
     function report(uint256 gain, uint256 loss) external returns (uint256) {
@@ -136,6 +188,7 @@ contract Vault is ERC20, IVault {
         }
         strategies[msg.sender].lastReport = block.timestamp;
         lastReport = block.timestamp;
+        emit StrategyReported(msg.sender, gain, loss, credit);
         return debtOutstanding(msg.sender);
     }
 
@@ -148,6 +201,7 @@ contract Vault is ERC20, IVault {
             _assessFee(_strategy, _profit);
         }
         strategies[_strategy].totalDebt += _assetsAmount;
+        emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
     }
 
     function _assessFee(address _strategy, uint256 gain)
@@ -178,14 +232,12 @@ contract Vault is ERC20, IVault {
     }
 
     function deposit(uint256 assets, address receiver)
-        public
-        virtual
+        external
         returns (uint256 shares)
     {
         assert(!emergencyShutdown);
         require((shares = previewDeposit(assets)) != 0, "ZERO_SHARES");
         require(receiver != address(0), "Invalid address");
-        // Need to transfer before minting or ERC777s could reenter.
         asset.safeTransferFrom(msg.sender, address(this), assets);
         shares = convertToShares(assets);
         _mint(receiver, shares);
@@ -261,41 +313,5 @@ contract Vault is ERC20, IVault {
         emit Withdraw(msg.sender, receiver, owner, assets, shares, loss);
 
         asset.safeTransfer(receiver, withdrawingAssets);
-    }
-
-    function convertToShares(uint256 assets) public view returns (uint256) {
-        uint256 supply = totalSupply(); // Saves an extra SLOAD if totalSupply is non-zero.
-
-        return supply == 0 ? assets : (assets * supply) / totalAssets();
-    }
-
-    function convertToAssets(uint256 shares) public view returns (uint256) {
-        uint256 supply = totalSupply(); // Saves an extra SLOAD if totalSupply is non-zero.
-
-        return supply == 0 ? shares : (shares * totalAssets()) / supply;
-    }
-
-    function maxDeposit(address) public view virtual returns (uint256) {
-        return type(uint256).max;
-    }
-
-    function previewDeposit(uint256 assets) public view returns (uint256) {
-        return convertToShares(assets);
-    }
-
-    function maxMint(address) public view virtual returns (uint256) {
-        return type(uint256).max;
-    }
-
-    function totalAssets() public view returns (uint256) {
-        return asset.balanceOf(address(this)) + totalDebt;
-    }
-
-    function debtOutstanding(address _strategy) public view returns (uint256) {
-        return strategies[_strategy].totalDebt;
-    }
-
-    function creditAvailable() external view returns (uint256) {
-        return asset.balanceOf(address(this));
     }
 }
