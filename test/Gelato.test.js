@@ -60,7 +60,6 @@ describe("Gelato", () => {
         await strategy.deployed();
         await vault.addStrategy(strategy.address, 1000);
 
-        //deposit dai from rich user to Vault
         const underlyingDecimals = 18;
         signer = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
         await underlying.connect(signer).transfer(owner.address, (10 * Math.pow(10, underlyingDecimals)).toString());

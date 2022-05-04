@@ -17,8 +17,10 @@ contract Vault is ERC20, IVault {
     address public governance;
     uint256 constant SECS_PER_YEAR = 31556952;
     uint256 constant feeDecimals = 4;
+    uint256 constant MAXIMUM_STRATEGIES = 20;
     uint256 lastReport;
     bool public emergencyShutdown;
+    address[MAXIMUM_STRATEGIES] public withdrawalQueue;
 
     event emergencyShutdownEnabled(bool isActive);
 
@@ -80,6 +82,7 @@ contract Vault is ERC20, IVault {
     }
 
     function _initialize(address _governance) internal {
+        require(_governance != address(0), "Invalid address");
         governance = _governance;
         managementFee = 1000;
         performanceFee = 200;
@@ -90,36 +93,36 @@ contract Vault is ERC20, IVault {
         emit emergencyShutdownEnabled(_active);
     }
 
-    function convertToShares(uint256 assets) public view returns (uint256) {
+    function convertToShares(uint256 _assets) public view returns (uint256) {
         uint256 supply = totalSupply();
 
-        return supply == 0 ? assets : (assets * supply) / totalAssets();
+        return supply == 0 ? _assets : (_assets * supply) / totalAssets();
     }
 
-    function convertToAssets(uint256 shares) public view returns (uint256) {
+    function convertToAssets(uint256 _shares) public view returns (uint256) {
         uint256 supply = totalSupply();
 
-        return supply == 0 ? shares : (shares * totalAssets()) / supply;
+        return supply == 0 ? _shares : (_shares * totalAssets()) / supply;
     }
 
-    function maxDeposit(address) public view virtual returns (uint256) {
+    function maxDeposit(address) public pure returns (uint256) {
         return type(uint256).max;
     }
 
-    function previewDeposit(uint256 assets) public view returns (uint256) {
-        return convertToShares(assets);
+    function previewDeposit(uint256 _assets) public view returns (uint256) {
+        return convertToShares(_assets);
     }
 
     function maxMint(address) public view virtual returns (uint256) {
         return type(uint256).max;
     }
 
-    function totalAssets() public view returns (uint256) {
-        return asset.balanceOf(address(this)) + totalDebt;
-    }
-
     function debtOutstanding(address _strategy) public view returns (uint256) {
         return strategies[_strategy].totalDebt;
+    }
+
+    function totalAssets() public view returns (uint256) {
+        return asset.balanceOf(address(this)) + totalDebt;
     }
 
     function creditAvailable() external view returns (uint256) {
@@ -152,8 +155,12 @@ contract Vault is ERC20, IVault {
         emit StrategyMigrated(oldVersion, newVersion);
     }
 
-    function addStrategy(address _strategy, uint256 _performanceFee) external {
+    function addStrategy(address _strategy, uint256 _performanceFee)
+        external
+        onlyGovernance
+    {
         assert(!emergencyShutdown);
+        require(_strategy != address(0), "Invalid address");
         strategies[_strategy] = StrategyParams({
             performanceFee: _performanceFee,
             activation: block.timestamp,
@@ -166,9 +173,12 @@ contract Vault is ERC20, IVault {
         emit StrategyAdded(_strategy);
     }
 
-    function report(uint256 gain, uint256 loss) external returns (uint256) {
+    function report(uint256 _gain, uint256 _loss) external returns (uint256) {
+        require(
+            strategies[msg.sender].activation > 0,
+            "Only activated strategy"
+        );
         uint256 credit = asset.balanceOf(address(this));
-        console.log("credit", credit);
 
         if (credit > 0) {
             asset.safeTransfer(msg.sender, credit);
@@ -176,19 +186,19 @@ contract Vault is ERC20, IVault {
             totalDebt += credit;
         }
 
-        if (gain > 0) {
-            strategies[msg.sender].totalGain += gain;
-            totalDebt += gain;
-            _assessFee(msg.sender, gain);
+        if (_gain > 0) {
+            strategies[msg.sender].totalGain += _gain;
+            totalDebt += _gain;
+            _assessFee(msg.sender, _gain);
         }
 
-        if (loss > 0) {
-            strategies[msg.sender].totalLoss += loss;
-            totalDebt -= loss;
+        if (_loss > 0) {
+            strategies[msg.sender].totalLoss += _loss;
+            totalDebt -= _loss;
         }
         strategies[msg.sender].lastReport = block.timestamp;
         lastReport = block.timestamp;
-        emit StrategyReported(msg.sender, gain, loss, credit);
+        emit StrategyReported(msg.sender, _gain, _loss, credit);
         return debtOutstanding(msg.sender);
     }
 
@@ -197,38 +207,15 @@ contract Vault is ERC20, IVault {
         uint256 _assetsAmount,
         uint256 _profit
     ) external {
+        require(
+            strategies[msg.sender].activation > 0,
+            "Only activated strategy"
+        );
         if (_profit > 0) {
             _assessFee(_strategy, _profit);
         }
         strategies[_strategy].totalDebt += _assetsAmount;
         emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
-    }
-
-    function _assessFee(address _strategy, uint256 gain)
-        internal
-        returns (uint256)
-    {
-        if (strategies[_strategy].activation == block.timestamp || gain == 0) {
-            return 0;
-        }
-        uint256 duration = block.timestamp - strategies[_strategy].lastReport;
-        assert(duration != 0);
-        uint256 management_fee = ((strategies[_strategy].totalDebt -
-            ((strategies[_strategy].totalDebt *
-                (10**feeDecimals - managementFee)) / (10**feeDecimals))) /
-            SECS_PER_YEAR) * duration;
-
-        uint256 performance_fee = gain -
-            ((gain * (10**feeDecimals - performanceFee)) / (10**feeDecimals));
-        uint256 total_fee = performance_fee + management_fee;
-        if (total_fee > gain) {
-            total_fee = gain;
-        }
-        if (total_fee > 0) {
-            uint256 shares = convertToShares(total_fee);
-            _mint(governance, shares);
-        }
-        return total_fee;
     }
 
     function deposit(uint256 assets, address receiver)
@@ -245,18 +232,19 @@ contract Vault is ERC20, IVault {
     }
 
     function withdraw(
-        uint256 assets,
-        address receiver,
-        address owner
-    ) public returns (uint256 shares, uint256 loss) {
+        uint256 _assets,
+        address _receiver,
+        address _owner
+    ) external returns (uint256 shares, uint256 loss) {
         assert(!emergencyShutdown);
-        assert(assets > 0);
+        assert(_assets > 0);
+        require(_receiver != address(0), "Invalid address");
         uint256 withdrawingAssets;
-        shares = convertToShares(assets);
+        shares = convertToShares(_assets);
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
-        if (currentBalanceVault < assets) {
-            uint256 amountNeeded = assets - currentBalanceVault;
+        if (currentBalanceVault < _assets) {
+            uint256 amountNeeded = _assets - currentBalanceVault;
             bool redeemType = false;
 
             (loss, withdrawingAssets) = IStrategy(strategy).withdraw(
@@ -264,37 +252,38 @@ contract Vault is ERC20, IVault {
                 redeemType
             );
         } else {
-            withdrawingAssets = assets;
+            withdrawingAssets = _assets;
         }
-        if (msg.sender != owner) {
-            _spendAllowance(owner, msg.sender, shares);
+        if (msg.sender != _owner) {
+            _spendAllowance(_owner, msg.sender, shares);
         }
 
-        _burn(owner, shares);
+        _burn(_owner, shares);
 
         emit Withdraw(
             msg.sender,
-            receiver,
-            owner,
+            _receiver,
+            _owner,
             withdrawingAssets,
             shares,
             loss
         );
 
-        asset.safeTransfer(receiver, withdrawingAssets);
+        asset.safeTransfer(_receiver, withdrawingAssets);
     }
 
     function redeem(
-        uint256 shares,
-        address receiver,
-        address owner
-    ) public returns (uint256 assets, uint256 loss) {
+        uint256 _shares,
+        address _receiver,
+        address _owner
+    ) external returns (uint256 assets, uint256 loss) {
+        require(_receiver != address(0), "Invalid address");
         uint256 withdrawingAssets;
-        if (msg.sender != owner) {
-            _spendAllowance(owner, msg.sender, shares);
+        if (msg.sender != _owner) {
+            _spendAllowance(_owner, msg.sender, _shares);
         }
-        assert(shares > 0);
-        assets = convertToAssets(shares);
+        assert(_shares > 0);
+        assets = convertToAssets(_shares);
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
         if (currentBalanceVault < assets) {
@@ -308,10 +297,37 @@ contract Vault is ERC20, IVault {
             withdrawingAssets = assets;
         }
 
-        _burn(owner, shares);
+        _burn(_owner, _shares);
 
-        emit Withdraw(msg.sender, receiver, owner, assets, shares, loss);
+        emit Withdraw(msg.sender, _receiver, _owner, assets, _shares, loss);
 
-        asset.safeTransfer(receiver, withdrawingAssets);
+        asset.safeTransfer(_receiver, withdrawingAssets);
+    }
+
+    function _assessFee(address _strategy, uint256 _gain)
+        private
+        returns (uint256)
+    {
+        if (strategies[_strategy].activation == block.timestamp || _gain == 0) {
+            return 0;
+        }
+        uint256 duration = block.timestamp - strategies[_strategy].lastReport;
+        assert(duration != 0);
+        uint256 management_fee = ((strategies[_strategy].totalDebt -
+            ((strategies[_strategy].totalDebt *
+                (10**feeDecimals - managementFee)) / (10**feeDecimals))) /
+            SECS_PER_YEAR) * duration;
+
+        uint256 performance_fee = _gain -
+            ((_gain * (10**feeDecimals - performanceFee)) / (10**feeDecimals));
+        uint256 total_fee = performance_fee + management_fee;
+        if (total_fee > _gain) {
+            total_fee = _gain;
+        }
+        if (total_fee > 0) {
+            uint256 shares = convertToShares(total_fee);
+            _mint(governance, shares);
+        }
+        return total_fee;
     }
 }
