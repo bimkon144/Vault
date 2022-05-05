@@ -121,6 +121,14 @@ contract Vault is ERC20, IVault {
         return strategies[_strategy].totalDebt;
     }
 
+    function strategyParams(address _strategy)
+        public
+        view
+        returns (StrategyParams memory)
+    {
+        return strategies[_strategy];
+    }
+
     function totalAssets() public view returns (uint256) {
         return asset.balanceOf(address(this)) + totalDebt;
     }
@@ -202,22 +210,6 @@ contract Vault is ERC20, IVault {
         return debtOutstanding(msg.sender);
     }
 
-    function reportWithdraw(
-        address _strategy,
-        uint256 _assetsAmount,
-        uint256 _profit
-    ) external {
-        require(
-            strategies[msg.sender].activation > 0,
-            "Only activated strategy"
-        );
-        if (_profit > 0) {
-            _assessFee(_strategy, _profit);
-        }
-        strategies[_strategy].totalDebt += _assetsAmount;
-        emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
-    }
-
     function deposit(uint256 assets, address receiver)
         external
         returns (uint256 shares)
@@ -270,6 +262,22 @@ contract Vault is ERC20, IVault {
         );
 
         asset.safeTransfer(_receiver, withdrawingAssets);
+    }
+
+    function reportWithdraw(
+        address _strategy,
+        uint256 _assetsAmount,
+        uint256 _profit
+    ) external {
+        require(
+            strategies[msg.sender].activation > 0,
+            "Only activated strategy"
+        );
+        if (_profit > 0) {
+            _assessFee(_strategy, _profit);
+        }
+        strategies[_strategy].totalDebt += _assetsAmount;
+        emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
     }
 
     function redeem(

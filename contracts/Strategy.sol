@@ -128,7 +128,9 @@ contract Strategy is IStrategy {
         emit EmergencyExitEnabled();
     }
 
-    function toggleStrategyPause() public onlyAuthorized {
+    function toggleStrategyPause() public  {
+        require(msg.sender == address(vault) || msg.sender == vault.governance(), "can be called by vault or governance");
+        console.log(strategyPause);
         strategyPause = !strategyPause;
         if (strategyPause) {
             uint256 amountFreed = sendAllAssetsToStrategy();
@@ -142,6 +144,7 @@ contract Strategy is IStrategy {
     }
 
     function migrate(address _newStrategy) external {
+
         require(msg.sender == address(vault));
         require(IStrategy(_newStrategy).vault() == vault);
 
@@ -183,9 +186,12 @@ contract Strategy is IStrategy {
     }
 
     function sendAllAssetsToStrategy() internal returns (uint256 _amountFreed) {
+        uint256 amountOut;
         cToken.redeem(cToken.balanceOf(address(this)));
         uint256 amountOfCompToken = claimComps(address(this));
-        uint256 amountOut = swapExactInputSingle(amountOfCompToken);
+        if (amountOfCompToken > 0) {
+        amountOut = swapExactInputSingle(amountOfCompToken);
+        }
         uint256 wantStrategyAmount = want.balanceOf(address(this));
         _amountFreed = wantStrategyAmount + amountOut;
     }

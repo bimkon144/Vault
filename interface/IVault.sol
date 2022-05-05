@@ -13,9 +13,16 @@ interface IVault is IERC20 {
 
 
     function governance() external view returns (address);
+
     function asset() external view returns (ERC20);
+
+    function emergencyShutdown() external view returns (bool);
+
     function creditAvailable() external view returns (uint256);
+
     function debtOutstanding(address strategy) external view returns (uint256);
+
     function reportWithdraw(address _strategy, uint256 _assetsAmount, uint256 _profit) external;
+
 
 }
