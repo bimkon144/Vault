@@ -1,16 +1,18 @@
 //SPDX-License-Identifier: Unlicense
+//https://eips.ethereum.org/EIPS/eip-4626
 pragma solidity 0.8.10;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 import "../interface/IVault.sol";
 import "../interface/IStrategy.sol";
 import "hardhat/console.sol";
 
-contract Vault is ERC20, IVault {
+contract Vault is ERC20, IVault, ReentrancyGuard {
     using SafeERC20 for ERC20;
     ERC20 public immutable asset;
-    IStrategy public strategy;
     uint256 public totalDebt;
     uint256 public managementFee;
     uint256 public performanceFee;
@@ -20,7 +22,7 @@ contract Vault is ERC20, IVault {
     uint256 constant MAXIMUM_STRATEGIES = 20;
     uint256 lastReport;
     bool public emergencyShutdown;
-    address[MAXIMUM_STRATEGIES] public withdrawalQueue;
+    address[] public withdrawalQueue;
 
     event emergencyShutdownEnabled(bool isActive);
 
@@ -44,9 +46,9 @@ contract Vault is ERC20, IVault {
         address indexed caller,
         address indexed receiver,
         address indexed owner,
-        uint256 assets,
+        uint256 requestedAssets,
         uint256 shares,
-        uint256 loss
+        uint256 receivedAssets
     );
 
     event StrategyMigrated(address oldVersion, address newVersion);
@@ -157,7 +159,7 @@ contract Vault is ERC20, IVault {
             totalLoss: 0
         });
 
-        strategy = IStrategy(newVersion);
+
         IStrategy(oldVersion).migrate(newVersion);
 
         emit StrategyMigrated(oldVersion, newVersion);
@@ -177,7 +179,11 @@ contract Vault is ERC20, IVault {
             totalGain: 0,
             totalLoss: 0
         });
-        strategy = IStrategy(_strategy);
+        require(
+            withdrawalQueue.length < MAXIMUM_STRATEGIES,
+            "MAXIMUM_STRATEGIES"
+        );
+        withdrawalQueue.push(_strategy);
         emit StrategyAdded(_strategy);
     }
 
@@ -211,7 +217,7 @@ contract Vault is ERC20, IVault {
     }
 
     function deposit(uint256 assets, address receiver)
-        external
+        external nonReentrant
         returns (uint256 shares)
     {
         assert(!emergencyShutdown);
@@ -227,7 +233,7 @@ contract Vault is ERC20, IVault {
         uint256 _assets,
         address _receiver,
         address _owner
-    ) external returns (uint256 shares, uint256 loss) {
+    ) external nonReentrant returns (uint256 shares) {
         assert(!emergencyShutdown);
         assert(_assets > 0);
         require(_receiver != address(0), "Invalid address");
@@ -236,11 +242,9 @@ contract Vault is ERC20, IVault {
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
         if (currentBalanceVault < _assets) {
-            uint256 amountNeeded = _assets - currentBalanceVault;
             bool redeemType = false;
-
-            (loss, withdrawingAssets) = IStrategy(strategy).withdraw(
-                amountNeeded,
+            withdrawingAssets = _withdrawFromStrategies(
+                _assets,
                 redeemType
             );
         } else {
@@ -256,9 +260,9 @@ contract Vault is ERC20, IVault {
             msg.sender,
             _receiver,
             _owner,
-            withdrawingAssets,
+            _assets,
             shares,
-            loss
+            withdrawingAssets
         );
 
         asset.safeTransfer(_receiver, withdrawingAssets);
@@ -277,6 +281,7 @@ contract Vault is ERC20, IVault {
             _assessFee(_strategy, _profit);
         }
         strategies[_strategy].totalDebt += _assetsAmount;
+        totalDebt -= _assetsAmount;
         emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
     }
 
@@ -284,7 +289,7 @@ contract Vault is ERC20, IVault {
         uint256 _shares,
         address _receiver,
         address _owner
-    ) external returns (uint256 assets, uint256 loss) {
+    ) external nonReentrant returns (uint256 assets) {
         require(_receiver != address(0), "Invalid address");
         uint256 withdrawingAssets;
         if (msg.sender != _owner) {
@@ -295,10 +300,9 @@ contract Vault is ERC20, IVault {
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
         if (currentBalanceVault < assets) {
-            uint256 amountNeeded = assets - currentBalanceVault;
             bool redeemType = true;
-            (loss, withdrawingAssets) = IStrategy(strategy).withdraw(
-                amountNeeded,
+            withdrawingAssets = _withdrawFromStrategies(
+                assets,
                 redeemType
             );
         } else {
@@ -307,7 +311,7 @@ contract Vault is ERC20, IVault {
 
         _burn(_owner, _shares);
 
-        emit Withdraw(msg.sender, _receiver, _owner, assets, _shares, loss);
+        emit Withdraw(msg.sender, _receiver, _owner, assets, _shares,  withdrawingAssets);
 
         asset.safeTransfer(_receiver, withdrawingAssets);
     }
@@ -337,5 +341,37 @@ contract Vault is ERC20, IVault {
             _mint(governance, shares);
         }
         return total_fee;
+    }
+
+    function _withdrawFromStrategies(uint256 _assets, bool _redeemType)
+        private
+        returns (uint256 summaryAmountToWithdraw)
+    {
+        address strategy;
+        uint256 loss;
+        uint256 withdrawedAmount;
+
+        for (uint256 i; i < withdrawalQueue.length; i++) {
+            strategy = withdrawalQueue[i];
+
+            uint256 vaultBalance = asset.balanceOf(address(this));
+
+            if (vaultBalance >= _assets) break;
+
+            uint256 amountNeeded = _assets - vaultBalance;
+
+            amountNeeded = Math.min(
+                amountNeeded,
+                strategies[strategy].totalDebt
+            );
+
+            //withdrawingAssets includes personal amount of the tokens depends on loss/profit of the user
+            //each strategy make report themselves
+            (loss, withdrawedAmount) = IStrategy(strategy).withdraw(
+                amountNeeded,
+                _redeemType
+            );
+            summaryAmountToWithdraw += withdrawedAmount;
+        }
     }
 }
