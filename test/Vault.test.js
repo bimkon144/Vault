@@ -96,10 +96,6 @@ describe("Vault", () => {
       expect(await vault.maxDeposit(owner.address)).to.equal(maxPossibleUint);
     });
 
-    it("previewDeposit should return 100 coz totalSupply is 0 / 1:1 converted", async () => {
-      expect(await vault.previewDeposit(100)).to.equal(100);
-    });
-
     it("maxMint should be equel max uint number", async () => {
       expect(await vault.maxMint(owner.address)).to.equal(maxPossibleUint);
     });

@@ -1,7 +1,7 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity 0.8.10;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-
+// EIP-4626: Tokenized Vault Standard - https://eips.ethereum.org/EIPS/eip-4626
 
 interface IVault is IERC20 {
 

@@ -77,14 +77,14 @@ describe("Gelato", () => {
     });
 
 
-    it("should  create task", async function () {
+    it("should  create task", async () => {
         await strategyResolver.startTask();
         const [taskId] = await ops.getTaskIdsByUser(strategyResolver.address);
         const taskCreator = await ops.taskCreator(taskId);
         expect(taskCreator).to.equal(strategyResolver.address);
     });
 
-    it("had to be executed ", async function () {
+    it("had to be executed ", async () => {
 
         const TokenAddress = '0x6B175474E89094C44Da98b954EedeAC495271d0F';
 

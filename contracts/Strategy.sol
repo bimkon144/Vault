@@ -4,6 +4,7 @@ pragma solidity 0.8.10;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "../interface/IStrategy.sol";
 import "../interface/IVault.sol";
 import "../interface/CErc20.sol";
@@ -13,7 +14,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import "hardhat/console.sol";
 
-contract Strategy is IStrategy {
+contract Strategy is IStrategy, ReentrancyGuard {
     using SafeERC20 for IERC20;
     CErc20 public cToken;
     IComp public compToken;
@@ -105,10 +106,7 @@ contract Strategy is IStrategy {
         swapRouter = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     }
 
-    function setReportDelay(uint256 _delay) external onlyAuthorized {
-        reportDelay = _delay;
-        emit UpdatedReportDelay(_delay);
-    }
+ 
 
     function setStrategist(address _strategist) external onlyAuthorized {
         require(_strategist != address(0));
@@ -130,7 +128,6 @@ contract Strategy is IStrategy {
 
     function toggleStrategyPause() public  {
         require(msg.sender == address(vault) || msg.sender == vault.governance(), "can be called by vault or governance");
-        console.log(strategyPause);
         strategyPause = !strategyPause;
         if (strategyPause) {
             uint256 amountFreed = sendAllAssetsToStrategy();
@@ -143,21 +140,22 @@ contract Strategy is IStrategy {
         }
     }
 
-    function migrate(address _newStrategy) external {
+    function migrate(address _newStrategy) external returns (uint256 freedAmount){
 
         require(msg.sender == address(vault));
         require(IStrategy(_newStrategy).vault() == vault);
 
         toggleStrategyPause();
+        freedAmount =  want.balanceOf(address(this));
 
         SafeERC20.safeTransfer(
             want,
             _newStrategy,
-            want.balanceOf(address(this))
+            freedAmount
         );
     }
 
-    function harvest() external returns (uint256) {
+    function harvest() external nonReentrant returns (uint256) {
         uint256 profit = 0;
         uint256 loss = 0;
         uint256 debtOutstanding = vault.debtOutstanding(address(this));
@@ -267,7 +265,7 @@ contract Strategy is IStrategy {
     }
 
     function withdraw(uint256 _amountNeeded, bool typeOfRedeem)
-        external
+        external nonReentrant
         returns (uint256 lossForUser, uint256 amountFreed)
     {
         assert(!emergencyExit);
@@ -302,7 +300,7 @@ contract Strategy is IStrategy {
 
             amountFreed = liquidatePosition(amountToFreed, typeOfRedeem);
             want.safeTransfer(msg.sender, amountFreed);
-            vault.reportWithdraw(address(this), amountFreed, profitForUser);
+            vault.reportWithdraw(address(this), _amountNeeded, profitForUser);
             emit WithdrawedFromStrategy(address(this), amountFreed);
         }
     }

@@ -5,6 +5,10 @@ import "../interface/IVault.sol";
 interface IStrategy {
     function strategyName() external view returns (string memory);
 
+    function strategist() external view returns (address);
+    
+    function keeper() external view returns (address);
+
     function vault() external view returns (IVault _vault);
 
     function harvest() external returns (uint);
@@ -19,5 +23,5 @@ interface IStrategy {
     
     function strategyPause() external view returns (bool);
 
-    function migrate(address _newStrategy) external;
+    function migrate(address _newStrategy) external returns (uint256 freedAmount);
 }

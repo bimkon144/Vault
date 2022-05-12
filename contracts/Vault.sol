@@ -1,5 +1,5 @@
 //SPDX-License-Identifier: Unlicense
-//https://eips.ethereum.org/EIPS/eip-4626
+
 pragma solidity 0.8.10;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -51,7 +51,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         uint256 receivedAssets
     );
 
-    event StrategyMigrated(address oldVersion, address newVersion);
+    event StrategyMigrated(address oldVersion, uint256 gain, uint256 loss,  address newVersion, uint256 newTotalDebt);
 
     event StrategyAdded(address strategy);
 
@@ -111,9 +111,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         return type(uint256).max;
     }
 
-    function previewDeposit(uint256 _assets) public view returns (uint256) {
-        return convertToShares(_assets);
-    }
 
     function maxMint(address) public view virtual returns (uint256) {
         return type(uint256).max;
@@ -139,30 +136,46 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         return asset.balanceOf(address(this));
     }
 
-    function migrateStrategy(address oldVersion, address newVersion)
+    function migrateStrategy(address _oldVersion, address _newVersion, uint256 _perfomanceFee)
         external
         onlyGovernance
     {
-        require(newVersion != address(0));
+        require(_newVersion != address(0));
         assert(
-            strategies[oldVersion].activation > 0 &&
-                strategies[newVersion].activation == 0
+            strategies[_oldVersion].activation > 0 &&
+                strategies[_newVersion].activation == 0
         );
-        StrategyParams memory oldStrategy = strategies[oldVersion];
+        uint256 profit;
+        uint256 loss;
+        uint256 migratedAmount = IStrategy(_oldVersion).migrate(_newVersion);
+        if (migratedAmount > strategies[_oldVersion].totalDebt) {
+            profit = migratedAmount - strategies[_oldVersion].totalDebt;
+        } else {
+            loss = strategies[_oldVersion].totalDebt - migratedAmount;
+        }
+        strategies[_oldVersion].totalDebt = 0;
+        strategies[_oldVersion].totalGain += profit;
+        strategies[_oldVersion].totalLoss += loss;
+        strategies[_oldVersion].activation = 0;
 
-        strategies[newVersion] = StrategyParams({
-            performanceFee: oldStrategy.performanceFee,
+
+        strategies[_newVersion] = StrategyParams({
+            performanceFee: _perfomanceFee,
             activation: block.timestamp,
-            lastReport: oldStrategy.lastReport,
-            totalDebt: oldStrategy.totalDebt,
+            lastReport: block.timestamp,
+            totalDebt: migratedAmount,
             totalGain: 0,
             totalLoss: 0
         });
 
+        emit StrategyMigrated(_oldVersion, profit, loss, _newVersion, migratedAmount );
 
-        IStrategy(oldVersion).migrate(newVersion);
-
-        emit StrategyMigrated(oldVersion, newVersion);
+        for (uint256 i; i < MAXIMUM_STRATEGIES; i++) {
+            if (withdrawalQueue[i] == _oldVersion) {
+                withdrawalQueue[i] = _newVersion;
+                break;
+            }
+        }
     }
 
     function addStrategy(address _strategy, uint256 _performanceFee)
@@ -187,7 +200,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         emit StrategyAdded(_strategy);
     }
 
-    function report(uint256 _gain, uint256 _loss) external returns (uint256) {
+    function report(uint256 _gain, uint256 _loss) external nonReentrant returns (uint256) {
         require(
             strategies[msg.sender].activation > 0,
             "Only activated strategy"
@@ -217,11 +230,12 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     }
 
     function deposit(uint256 assets, address receiver)
-        external nonReentrant
+        external
+        nonReentrant
         returns (uint256 shares)
     {
         assert(!emergencyShutdown);
-        require((shares = previewDeposit(assets)) != 0, "ZERO_SHARES");
+        require((shares = convertToShares(assets)) != 0, "ZERO_SHARES");
         require(receiver != address(0), "Invalid address");
         asset.safeTransferFrom(msg.sender, address(this), assets);
         shares = convertToShares(assets);
@@ -230,25 +244,25 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     }
 
     function withdraw(
-        uint256 _assets,
+        uint256 _requestedAssets,
         address _receiver,
         address _owner
     ) external nonReentrant returns (uint256 shares) {
         assert(!emergencyShutdown);
-        assert(_assets > 0);
+        assert(_requestedAssets > 0);
         require(_receiver != address(0), "Invalid address");
         uint256 withdrawingAssets;
-        shares = convertToShares(_assets);
+        shares = convertToShares(_requestedAssets);
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
-        if (currentBalanceVault < _assets) {
+        if (currentBalanceVault < _requestedAssets) {
             bool redeemType = false;
             withdrawingAssets = _withdrawFromStrategies(
-                _assets,
+                _requestedAssets,
                 redeemType
             );
         } else {
-            withdrawingAssets = _assets;
+            withdrawingAssets = _requestedAssets;
         }
         if (msg.sender != _owner) {
             _spendAllowance(_owner, msg.sender, shares);
@@ -260,7 +274,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
             msg.sender,
             _receiver,
             _owner,
-            _assets,
+            _requestedAssets,
             shares,
             withdrawingAssets
         );
@@ -268,11 +282,24 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         asset.safeTransfer(_receiver, withdrawingAssets);
     }
 
+    function mint(uint256 shares, address receiver)
+        external nonReentrant
+        returns (uint256 assets)
+    {
+        require((assets = convertToAssets(shares)) != 0, "Vault: ZERO_ASSETS");
+
+        asset.safeTransferFrom(msg.sender, address(this), assets);
+
+        _mint(receiver, shares);
+
+        emit Deposit(msg.sender, receiver, assets, shares);
+    }
+
     function reportWithdraw(
         address _strategy,
-        uint256 _assetsAmount,
+        uint256 _amountNeeded,
         uint256 _profit
-    ) external {
+    ) external  {
         require(
             strategies[msg.sender].activation > 0,
             "Only activated strategy"
@@ -280,38 +307,46 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         if (_profit > 0) {
             _assessFee(_strategy, _profit);
         }
-        strategies[_strategy].totalDebt += _assetsAmount;
-        totalDebt -= _assetsAmount;
-        emit ReportedWithdrawFromStrategy(msg.sender, _assetsAmount, _profit);
+        strategies[_strategy].totalDebt += _amountNeeded;
+        totalDebt -= _amountNeeded;
+        emit ReportedWithdrawFromStrategy(msg.sender, _amountNeeded, _profit);
     }
 
     function redeem(
         uint256 _shares,
         address _receiver,
         address _owner
-    ) external nonReentrant returns (uint256 assets) {
+    ) external nonReentrant returns (uint256 _requestedAssets) {
         require(_receiver != address(0), "Invalid address");
+        require((_requestedAssets = convertToAssets(_shares)) != 0, "Vault: ZERO_ASSETS");
         uint256 withdrawingAssets;
         if (msg.sender != _owner) {
             _spendAllowance(_owner, msg.sender, _shares);
         }
         assert(_shares > 0);
-        assets = convertToAssets(_shares);
+        _requestedAssets = convertToAssets(_shares);
         uint256 currentBalanceVault = asset.balanceOf(address(this));
 
-        if (currentBalanceVault < assets) {
+        if (currentBalanceVault < _requestedAssets) {
             bool redeemType = true;
             withdrawingAssets = _withdrawFromStrategies(
-                assets,
+                _requestedAssets,
                 redeemType
             );
         } else {
-            withdrawingAssets = assets;
+            withdrawingAssets = _requestedAssets;
         }
 
         _burn(_owner, _shares);
 
-        emit Withdraw(msg.sender, _receiver, _owner, assets, _shares,  withdrawingAssets);
+        emit Withdraw(
+            msg.sender,
+            _receiver,
+            _owner,
+            _requestedAssets,
+            _shares,
+            withdrawingAssets
+        );
 
         asset.safeTransfer(_receiver, withdrawingAssets);
     }
@@ -320,11 +355,10 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         private
         returns (uint256)
     {
-        if (strategies[_strategy].activation == block.timestamp || _gain == 0) {
+        if (strategies[_strategy].activation == block.timestamp || _gain == 0 || strategies[_strategy].lastReport == 0) {
             return 0;
         }
         uint256 duration = block.timestamp - strategies[_strategy].lastReport;
-        assert(duration != 0);
         uint256 management_fee = ((strategies[_strategy].totalDebt -
             ((strategies[_strategy].totalDebt *
                 (10**feeDecimals - managementFee)) / (10**feeDecimals))) /
