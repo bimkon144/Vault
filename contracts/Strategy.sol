@@ -30,9 +30,8 @@ contract Strategy is IStrategy, ReentrancyGuard {
     uint256 public totalRewards = 0;
     uint256 public lastExecuted = 0;
     uint256 public reportDelay = 86400;
-    bool public emergencyExit;  
+    bool public emergencyExit;
     bool public strategyPause;
-
 
     event UpdatedStrategist(address newStrategist);
 
@@ -56,7 +55,10 @@ contract Strategy is IStrategy, ReentrancyGuard {
 
     event AdjustedPosition(uint256 _amountMinted);
 
-    event WithdrawedFromStrategy(address strategyAddress, uint256 amountWithdrawed);
+    event WithdrawedFromStrategy(
+        address strategyAddress,
+        uint256 amountWithdrawed
+    );
 
     modifier onlyAuthorized() {
         require(msg.sender == strategist || msg.sender == vault.governance());
@@ -106,8 +108,6 @@ contract Strategy is IStrategy, ReentrancyGuard {
         swapRouter = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     }
 
- 
-
     function setStrategist(address _strategist) external onlyAuthorized {
         require(_strategist != address(0));
         strategist = _strategist;
@@ -123,11 +123,15 @@ contract Strategy is IStrategy, ReentrancyGuard {
     function setEmergencyExit() external onlyEmergencyAuthorized {
         emergencyExit = true;
         liquidateAllPositions();
+        
         emit EmergencyExitEnabled();
     }
 
-    function toggleStrategyPause() public  {
-        require(msg.sender == address(vault) || msg.sender == vault.governance(), "can be called by vault or governance");
+    function toggleStrategyPause() public {
+        require(
+            msg.sender == address(vault) || msg.sender == vault.governance(),
+            "can be called by vault or governance"
+        );
         strategyPause = !strategyPause;
         if (strategyPause) {
             uint256 amountFreed = sendAllAssetsToStrategy();
@@ -140,19 +144,17 @@ contract Strategy is IStrategy, ReentrancyGuard {
         }
     }
 
-    function migrate(address _newStrategy) external returns (uint256 freedAmount){
-
+    function migrate(address _newStrategy)
+        external
+        returns (uint256 freedAmount)
+    {
         require(msg.sender == address(vault));
         require(IStrategy(_newStrategy).vault() == vault);
 
         toggleStrategyPause();
-        freedAmount =  want.balanceOf(address(this));
+        freedAmount = want.balanceOf(address(this));
 
-        SafeERC20.safeTransfer(
-            want,
-            _newStrategy,
-            freedAmount
-        );
+        SafeERC20.safeTransfer(want, _newStrategy, freedAmount);
     }
 
     function harvest() external nonReentrant returns (uint256) {
@@ -188,7 +190,7 @@ contract Strategy is IStrategy, ReentrancyGuard {
         cToken.redeem(cToken.balanceOf(address(this)));
         uint256 amountOfCompToken = claimComps(address(this));
         if (amountOfCompToken > 0) {
-        amountOut = swapExactInputSingle(amountOfCompToken);
+            amountOut = swapExactInputSingle(amountOfCompToken);
         }
         uint256 wantStrategyAmount = want.balanceOf(address(this));
         _amountFreed = wantStrategyAmount + amountOut;
@@ -230,7 +232,6 @@ contract Strategy is IStrategy, ReentrancyGuard {
             amountIn
         );
 
-  
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter
             .ExactInputSingleParams({
                 tokenIn: address(compToken),
@@ -256,37 +257,47 @@ contract Strategy is IStrategy, ReentrancyGuard {
         emit AdjustedPosition(mintedTokens);
     }
 
-    function supplyErc20ToCompound(
-        uint256 _numTokensToSupply
-    ) internal returns (uint256) {
+    function supplyErc20ToCompound(uint256 _numTokensToSupply)
+        internal
+        returns (uint256)
+    {
         want.approve(address(cToken), _numTokensToSupply);
         uint256 mintResult = cToken.mint(_numTokensToSupply);
         return mintResult;
     }
 
     function withdraw(uint256 _amountNeeded, bool typeOfRedeem)
-        external nonReentrant
-        returns (uint256 lossForUser, uint256 amountFreed)
+        external
+        nonReentrant
+        returns (uint256 amountFreed, uint256 lossForUser)
     {
         assert(!emergencyExit);
         require(msg.sender == address(vault), "!vault");
         if (want.balanceOf(address(this)) >= _amountNeeded) {
             want.safeTransfer(msg.sender, _amountNeeded);
+            amountFreed = _amountNeeded;
         } else {
             assert(!strategyPause);
             uint256 _profit;
             uint256 _loss;
             uint256 profitForUser;
-            uint256 totalAssetsOnCompound = cToken.balanceOfUnderlying(address(this));
+            uint256 totalAssetsOnCompound = cToken.balanceOfUnderlying(
+                address(this)
+            );
             uint256 totalStrategyDebt = vault.debtOutstanding(address(this));
             if (totalAssetsOnCompound > totalStrategyDebt) {
-                _profit = totalAssetsOnCompound - totalStrategyDebt + totalRewards;
+                _profit =
+                    totalAssetsOnCompound -
+                    totalStrategyDebt +
+                    totalRewards;
             } else {
                 _loss = totalStrategyDebt - totalAssetsOnCompound;
             }
 
             if (_profit > 0) {
-                profitForUser = (_amountNeeded * _profit) / totalAssetsOnCompound;
+                profitForUser =
+                    (_amountNeeded * _profit) /
+                    totalAssetsOnCompound;
             } else {
                 profitForUser = 0;
             }
@@ -310,21 +321,17 @@ contract Strategy is IStrategy, ReentrancyGuard {
         virtual
         returns (uint256 _liquidatedAmount)
     {
-        bool liquidatedAmount = redeemCErc20Tokens(
-            _amountNeeded,
-            typeOfRedeem
-        );
+        bool liquidatedAmount = redeemCErc20Tokens(_amountNeeded, typeOfRedeem);
         if (liquidatedAmount) {
             _liquidatedAmount = want.balanceOf(address(this));
             emit LiquidatedPositionAmount(_liquidatedAmount);
         }
     }
 
-    function redeemCErc20Tokens(
-        uint256 amount,
-        bool redeemType
-    ) internal returns (bool) {
-
+    function redeemCErc20Tokens(uint256 amount, bool redeemType)
+        internal
+        returns (bool)
+    {
         uint256 redeemResult;
 
         if (redeemType == true) {

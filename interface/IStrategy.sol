@@ -17,6 +17,8 @@ interface IStrategy {
     
     function lastExecuted() external view returns (uint256);
 
+    function toggleStrategyPause() external;
+
     function reportDelay() external view returns (uint256);
 
     function emergencyExit() external view returns (bool);

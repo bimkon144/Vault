@@ -80,6 +80,11 @@ describe("Strategy", () => {
     await strategy.setKeeper(user.address);
     expect(await strategy.keeper()).to.equal(user.address);
   });
+  
+  it("setKeeper should set Keeper address", async() => {
+    await strategy.setKeeper(user.address);
+    expect(await strategy.keeper()).to.equal(user.address);
+  });
 
   it("call first harvest method that withdraw assets from vault and invest to the defi protocol", async () => {
     const underlyingDecimals = 18;

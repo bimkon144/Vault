@@ -15,8 +15,8 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     ERC20 public immutable asset;
     uint256 public totalDebt;
     uint256 public managementFee;
-    uint256 public performanceFee;
     address public governance;
+    uint256 MAX_BPS;
     uint256 constant SECS_PER_YEAR = 31556952;
     uint256 constant feeDecimals = 4;
     uint256 constant MAXIMUM_STRATEGIES = 20;
@@ -51,7 +51,13 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         uint256 receivedAssets
     );
 
-    event StrategyMigrated(address oldVersion, uint256 gain, uint256 loss,  address newVersion, uint256 newTotalDebt);
+    event StrategyMigrated(
+        address oldVersion,
+        uint256 gain,
+        uint256 loss,
+        address newVersion,
+        uint256 newTotalDebt
+    );
 
     event StrategyAdded(address strategy);
 
@@ -86,8 +92,8 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     function _initialize(address _governance) internal {
         require(_governance != address(0), "Invalid address");
         governance = _governance;
-        managementFee = 1000;
-        performanceFee = 200;
+        managementFee = 1000; // 1% per year
+        MAX_BPS = 10000; // min fee 0,01%
     }
 
     function setEmergencyShutdown(bool _active) external onlyGovernance {
@@ -110,7 +116,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     function maxDeposit(address) public pure returns (uint256) {
         return type(uint256).max;
     }
-
 
     function maxMint(address) public view virtual returns (uint256) {
         return type(uint256).max;
@@ -136,10 +141,27 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         return asset.balanceOf(address(this));
     }
 
-    function migrateStrategy(address _oldVersion, address _newVersion, uint256 _perfomanceFee)
-        external
-        onlyGovernance
-    {
+    function syncStrategy(uint256 _gain, uint256 _loss) public nonReentrant {
+        require(
+            strategies[msg.sender].activation > 0,
+            "Only activated strategy"
+        );
+        if (_gain > 0) {
+            strategies[msg.sender].totalGain += _gain;
+            totalDebt += _gain;
+            _assessFee(msg.sender, _gain);
+        }
+        if (_loss > 0) {
+            strategies[msg.sender].totalLoss += _loss;
+            totalDebt -= _loss;
+        }
+    }
+
+    function migrateStrategy(
+        address _oldVersion,
+        address _newVersion,
+        uint256 _perfomanceFee
+    ) external onlyGovernance {
         require(_newVersion != address(0));
         assert(
             strategies[_oldVersion].activation > 0 &&
@@ -147,28 +169,45 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         );
         uint256 profit;
         uint256 loss;
-        uint256 migratedAmount = IStrategy(_oldVersion).migrate(_newVersion);
-        if (migratedAmount > strategies[_oldVersion].totalDebt) {
-            profit = migratedAmount - strategies[_oldVersion].totalDebt;
-        } else {
-            loss = strategies[_oldVersion].totalDebt - migratedAmount;
+        IStrategy(_oldVersion).toggleStrategyPause();
+        (uint256 withdrawedFromOldStrategy, ) = IStrategy(_oldVersion).withdraw(
+            asset.balanceOf(_oldVersion),
+            true
+        );
+        asset.safeTransfer(_newVersion, withdrawedFromOldStrategy);
+
+        if (withdrawedFromOldStrategy > strategies[_oldVersion].totalDebt) {
+            profit =
+                withdrawedFromOldStrategy -
+                strategies[_oldVersion].totalDebt;
+            strategies[_oldVersion].totalGain += profit;
+        } else if (
+            strategies[_oldVersion].totalDebt > withdrawedFromOldStrategy
+        ) {
+            loss =
+                strategies[_oldVersion].totalDebt -
+                withdrawedFromOldStrategy;
+            strategies[_oldVersion].totalLoss += loss;
         }
         strategies[_oldVersion].totalDebt = 0;
-        strategies[_oldVersion].totalGain += profit;
-        strategies[_oldVersion].totalLoss += loss;
         strategies[_oldVersion].activation = 0;
-
 
         strategies[_newVersion] = StrategyParams({
             performanceFee: _perfomanceFee,
             activation: block.timestamp,
             lastReport: block.timestamp,
-            totalDebt: migratedAmount,
+            totalDebt: withdrawedFromOldStrategy,
             totalGain: 0,
             totalLoss: 0
         });
 
-        emit StrategyMigrated(_oldVersion, profit, loss, _newVersion, migratedAmount );
+        emit StrategyMigrated(
+            _oldVersion,
+            profit,
+            loss,
+            _newVersion,
+            withdrawedFromOldStrategy
+        );
 
         for (uint256 i; i < MAXIMUM_STRATEGIES; i++) {
             if (withdrawalQueue[i] == _oldVersion) {
@@ -200,12 +239,18 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         emit StrategyAdded(_strategy);
     }
 
-    function report(uint256 _gain, uint256 _loss) external nonReentrant returns (uint256) {
+    function report(uint256 _gain, uint256 _loss)
+        external
+        nonReentrant
+        returns (uint256)
+    {
         require(
             strategies[msg.sender].activation > 0,
             "Only activated strategy"
         );
         uint256 credit = asset.balanceOf(address(this));
+
+        syncStrategy(_gain, _loss);
 
         if (credit > 0) {
             asset.safeTransfer(msg.sender, credit);
@@ -213,16 +258,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
             totalDebt += credit;
         }
 
-        if (_gain > 0) {
-            strategies[msg.sender].totalGain += _gain;
-            totalDebt += _gain;
-            _assessFee(msg.sender, _gain);
-        }
-
-        if (_loss > 0) {
-            strategies[msg.sender].totalLoss += _loss;
-            totalDebt -= _loss;
-        }
         strategies[msg.sender].lastReport = block.timestamp;
         lastReport = block.timestamp;
         emit StrategyReported(msg.sender, _gain, _loss, credit);
@@ -283,7 +318,8 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
     }
 
     function mint(uint256 shares, address receiver)
-        external nonReentrant
+        external
+        nonReentrant
         returns (uint256 assets)
     {
         require((assets = convertToAssets(shares)) != 0, "Vault: ZERO_ASSETS");
@@ -299,7 +335,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         address _strategy,
         uint256 _amountNeeded,
         uint256 _profit
-    ) external  {
+    ) external {
         require(
             strategies[msg.sender].activation > 0,
             "Only activated strategy"
@@ -318,7 +354,10 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         address _owner
     ) external nonReentrant returns (uint256 _requestedAssets) {
         require(_receiver != address(0), "Invalid address");
-        require((_requestedAssets = convertToAssets(_shares)) != 0, "Vault: ZERO_ASSETS");
+        require(
+            (_requestedAssets = convertToAssets(_shares)) != 0,
+            "Vault: ZERO_ASSETS"
+        );
         uint256 withdrawingAssets;
         if (msg.sender != _owner) {
             _spendAllowance(_owner, msg.sender, _shares);
@@ -355,22 +394,25 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         private
         returns (uint256)
     {
-        if (strategies[_strategy].activation == block.timestamp || _gain == 0 || strategies[_strategy].lastReport == 0) {
+        if (
+            strategies[_strategy].activation == block.timestamp ||
+            _gain == 0 ||
+            strategies[_strategy].lastReport == 0
+        ) {
             return 0;
         }
         uint256 duration = block.timestamp - strategies[_strategy].lastReport;
-        uint256 management_fee = ((strategies[_strategy].totalDebt -
-            ((strategies[_strategy].totalDebt *
-                (10**feeDecimals - managementFee)) / (10**feeDecimals))) /
-            SECS_PER_YEAR) * duration;
-
-        uint256 performance_fee = _gain -
-            ((_gain * (10**feeDecimals - performanceFee)) / (10**feeDecimals));
-        uint256 total_fee = performance_fee + management_fee;
+        uint256 _managementFee = (strategies[_strategy].totalDebt *
+            managementFee *
+            duration) / (MAX_BPS * SECS_PER_YEAR);
+        uint256 perfomanceFee = (_gain * strategies[_strategy].performanceFee) /
+            MAX_BPS;
+        uint256 total_fee = perfomanceFee + _managementFee;
         if (total_fee > _gain) {
             total_fee = _gain;
         }
-        if (total_fee > 0) {
+        if (total_fee > _gain) {
+            total_fee = _gain;
             uint256 shares = convertToShares(total_fee);
             _mint(governance, shares);
         }
