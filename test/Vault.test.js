@@ -68,8 +68,6 @@ describe("Vault", () => {
     expect(await vault.symbol()).to.equal("STK");
     expect(await vault.governance()).to.equal(owner.address);
     expect(await vault.managementFee()).to.equal(1000);
-    expect(await vault.performanceFee()).to.equal(200);
-    expect(await vault.performanceFee()).to.equal(200);
   });
 
   describe("Testing of Methods", async () => {
@@ -129,7 +127,7 @@ describe("Vault", () => {
       expect(await cToken.callStatic.balanceOfUnderlying(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(9.999999999977192);
       expect(await cToken.callStatic.balanceOfUnderlying(newStrategy.address) / Math.pow(10, underlyingDecimals)).to.equal(0);
 
-      await vault.migrateStrategy(strategy.address,newStrategy.address);
+      await vault.migrateStrategy(strategy.address,newStrategy.address, 100);
 
       expect(await underlying.balanceOf(newStrategy.address) /Math.pow(10, underlyingDecimals)).to.equal(10.000000110501);
       expect(await cToken.callStatic.balanceOfUnderlying(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(0);

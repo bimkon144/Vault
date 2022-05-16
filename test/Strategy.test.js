@@ -86,42 +86,42 @@ describe("Strategy", () => {
     expect(await strategy.keeper()).to.equal(user.address);
   });
 
-  it("call first harvest method that withdraw assets from vault and invest to the defi protocol", async () => {
-    const underlyingDecimals = 18;
-    signer = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
-    await underlying.connect(signer).transfer(owner.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-    await underlying.approve(vault.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-    await vault.deposit((10 * Math.pow(10, underlyingDecimals)).toString(), owner.address);
-    await strategy.harvest();
-    // expect(await underlying.balanceOf(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
-    expect(await vault.debtOutstanding(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
-    // await strategy.supplyErc20ToCompound(
-    //   underlyingAddress,
-    //   cTokenAddress,
-    //   (10 * Math.pow(10, underlyingDecimals)).toString() 
-    // );
+  // it("call first harvest method that withdraw assets from vault and invest to the defi protocol", async () => {
+  //   const underlyingDecimals = 18;
+  //   signer = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
+  //   await underlying.connect(signer).transfer(owner.address, (10 * Math.pow(10, underlyingDecimals)).toString());
+  //   await underlying.approve(vault.address, (10 * Math.pow(10, underlyingDecimals)).toString());
+  //   await vault.deposit((10 * Math.pow(10, underlyingDecimals)).toString(), owner.address);
+  //   await strategy.harvest();
+  //   // expect(await underlying.balanceOf(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
+  //   // expect(await vault.debtOutstanding(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
+  //   // await strategy.supplyErc20ToCompound(
+  //   //   underlyingAddress,
+  //   //   cTokenAddress,
+  //   //   (10 * Math.pow(10, underlyingDecimals)).toString() 
+  //   // );
 
-    let balanceOfUnderlying = await cToken.callStatic
-      .balanceOfUnderlying(strategy.address) / Math.pow(10, underlyingDecimals);
-    console.log(` supplied to the Compound Protocol:`, balanceOfUnderlying);
+  //   let balanceOfUnderlying = await cToken.callStatic
+  //     .balanceOfUnderlying(strategy.address) / Math.pow(10, underlyingDecimals);
+  //   console.log(` supplied to the Compound Protocol:`, balanceOfUnderlying);
 
-    let cTokenBalance = await cToken.callStatic.balanceOf(strategy.address);
-    console.log(`Strategy's  Token Balance:`, +cTokenBalance / 1e8);
+  //   let cTokenBalance = await cToken.callStatic.balanceOf(strategy.address);
+  //   console.log(`Strategy's  Token Balance:`, +cTokenBalance / 1e8);
 
-    expect(balanceOfUnderlying).to.equal(9.999999999781632);
-    expect(+cTokenBalance / 1e8).to.equal(455.42830343);
-    // await strategy.prepareReturn();
-    // expect(await strategy.balanceOfComp() / 1e18).to.equal(2.04928259e-10);
-    const balanceOfComp = await comp.balanceOf(strategy.address);
-    // expect(balanceOfComp).to.equal(204928259);
-    expect(await underlying.balanceOf(strategy.address)).to.equal(0);
-    // await strategy.swapExactInputSingle(balanceOfComp);
-    expect(await comp.balanceOf(strategy.address) / 1e18).to.equal(0);
-    // expect(await underlying.balanceOf(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(1.01869262e-10);
-    expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10);
-    await strategy.harvest();
-    // expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10.000000065581547);
-  });
+  //   expect(balanceOfUnderlying).to.equal(9.999999999781632);
+  //   expect(+cTokenBalance / 1e8).to.equal(455.42830343);
+  //   // await strategy.prepareReturn();
+  //   // expect(await strategy.balanceOfComp() / 1e18).to.equal(2.04928259e-10);
+  //   const balanceOfComp = await comp.balanceOf(strategy.address);
+  //   // expect(balanceOfComp).to.equal(204928259);
+  //   expect(await underlying.balanceOf(strategy.address)).to.equal(0);
+  //   // await strategy.swapExactInputSingle(balanceOfComp);
+  //   expect(await comp.balanceOf(strategy.address) / 1e18).to.equal(0);
+  //   // expect(await underlying.balanceOf(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(1.01869262e-10);
+  //   expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10);
+  //   await strategy.harvest();
+  //   // expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10.000000065581547);
+  // });
 
   // it("should withdraw assets from strategy", async () => {
   //   const underlyingDecimals = 18;

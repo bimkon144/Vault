@@ -25,5 +25,4 @@ interface IStrategy {
     
     function strategyPause() external view returns (bool);
 
-    function migrate(address _newStrategy) external returns (uint256 freedAmount);
 }

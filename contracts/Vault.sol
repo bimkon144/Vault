@@ -141,7 +141,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         return asset.balanceOf(address(this));
     }
 
-    function syncStrategy(uint256 _gain, uint256 _loss) public nonReentrant {
+    function syncStrategy(uint256 _gain, uint256 _loss) public {
         require(
             strategies[msg.sender].activation > 0,
             "Only activated strategy"
@@ -149,7 +149,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         if (_gain > 0) {
             strategies[msg.sender].totalGain += _gain;
             totalDebt += _gain;
-            _assessFee(msg.sender, _gain);
         }
         if (_loss > 0) {
             strategies[msg.sender].totalLoss += _loss;
@@ -252,6 +251,10 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
 
         syncStrategy(_gain, _loss);
 
+        if (_gain > 0) {
+            _assessFee(msg.sender, _gain);
+        }
+
         if (credit > 0) {
             asset.safeTransfer(msg.sender, credit);
             strategies[msg.sender].totalDebt += credit;
@@ -331,23 +334,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
-    function reportWithdraw(
-        address _strategy,
-        uint256 _amountNeeded,
-        uint256 _profit
-    ) external {
-        require(
-            strategies[msg.sender].activation > 0,
-            "Only activated strategy"
-        );
-        if (_profit > 0) {
-            _assessFee(_strategy, _profit);
-        }
-        strategies[_strategy].totalDebt += _amountNeeded;
-        totalDebt -= _amountNeeded;
-        emit ReportedWithdrawFromStrategy(msg.sender, _amountNeeded, _profit);
-    }
-
     function redeem(
         uint256 _shares,
         address _receiver,
@@ -411,11 +397,8 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         if (total_fee > _gain) {
             total_fee = _gain;
         }
-        if (total_fee > _gain) {
-            total_fee = _gain;
-            uint256 shares = convertToShares(total_fee);
-            _mint(governance, shares);
-        }
+        uint256 shares = convertToShares(total_fee);
+        _mint(governance, shares);
         return total_fee;
     }
 

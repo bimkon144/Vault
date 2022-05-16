@@ -122,8 +122,13 @@ contract Strategy is IStrategy, ReentrancyGuard {
 
     function setEmergencyExit() external onlyEmergencyAuthorized {
         emergencyExit = true;
-        liquidateAllPositions();
-        
+        uint256 totalFreedAssets = liquidateAllPositions();
+        uint256 totalDebt = vault.debtOutstanding(address(this));
+        (uint256 profit, uint256 loss) = calculateProfitLoss(
+            totalFreedAssets,
+            totalDebt
+        );
+        vault.syncStrategy(profit, loss);
         emit EmergencyExitEnabled();
     }
 
@@ -135,6 +140,12 @@ contract Strategy is IStrategy, ReentrancyGuard {
         strategyPause = !strategyPause;
         if (strategyPause) {
             uint256 amountFreed = sendAllAssetsToStrategy();
+            uint256 totalDebt = vault.debtOutstanding(address(this));
+            (uint256 profit, uint256 loss) = calculateProfitLoss(
+                amountFreed,
+                totalDebt
+            );
+            vault.syncStrategy(profit, loss);
             emit StrategyPauseToggled(amountFreed);
         } else {
             uint256 mintedCTokensAmount = adjustPosition(
@@ -142,19 +153,6 @@ contract Strategy is IStrategy, ReentrancyGuard {
             );
             emit StrategyPauseToggled(mintedCTokensAmount);
         }
-    }
-
-    function migrate(address _newStrategy)
-        external
-        returns (uint256 freedAmount)
-    {
-        require(msg.sender == address(vault));
-        require(IStrategy(_newStrategy).vault() == vault);
-
-        toggleStrategyPause();
-        freedAmount = want.balanceOf(address(this));
-
-        SafeERC20.safeTransfer(want, _newStrategy, freedAmount);
     }
 
     function harvest() external nonReentrant returns (uint256) {
@@ -206,14 +204,19 @@ contract Strategy is IStrategy, ReentrancyGuard {
             );
         }
 
-        uint256 totalAssets = cToken.balanceOfUnderlying(address(this));
+        uint256 totalAssets = cToken.balanceOfUnderlying(address(this)) +
+            totalRewards;
         uint256 totalDebt = vault.debtOutstanding(address(this));
+        (_profit, _loss) = calculateProfitLoss(totalAssets, totalDebt);
+    }
 
-        if (totalAssets > totalDebt) {
-            _profit = totalAssets - totalDebt + totalRewards;
-        } else {
-            _loss = totalDebt - totalAssets;
-        }
+    function calculateProfitLoss(
+        uint256 _currentTotalAssets,
+        uint256 _totalDebt
+    ) internal pure returns (uint256 profit, uint256 loss) {
+        _currentTotalAssets > _totalDebt
+            ? profit = _currentTotalAssets - _totalDebt
+            : loss = _totalDebt - _currentTotalAssets;
     }
 
     function claimComps(address holder) internal returns (uint256) {
@@ -277,23 +280,20 @@ contract Strategy is IStrategy, ReentrancyGuard {
             want.safeTransfer(msg.sender, _amountNeeded);
             amountFreed = _amountNeeded;
         } else {
-            assert(!strategyPause);
             uint256 _profit;
             uint256 _loss;
             uint256 profitForUser;
             uint256 totalAssetsOnCompound = cToken.balanceOfUnderlying(
                 address(this)
-            );
+            ) + totalRewards;
             uint256 totalStrategyDebt = vault.debtOutstanding(address(this));
-            if (totalAssetsOnCompound > totalStrategyDebt) {
-                _profit =
-                    totalAssetsOnCompound -
-                    totalStrategyDebt +
-                    totalRewards;
-            } else {
-                _loss = totalStrategyDebt - totalAssetsOnCompound;
-            }
-
+            //calculate total profit loss of the strategy and sync with the vault
+            (_profit, _loss) = calculateProfitLoss(
+                totalAssetsOnCompound,
+                totalStrategyDebt
+            );
+            vault.syncStrategy(_profit, _loss);
+            //calculate profit/loss for user that withdrawing
             if (_profit > 0) {
                 profitForUser =
                     (_amountNeeded * _profit) /
@@ -311,7 +311,6 @@ contract Strategy is IStrategy, ReentrancyGuard {
 
             amountFreed = liquidatePosition(amountToFreed, typeOfRedeem);
             want.safeTransfer(msg.sender, amountFreed);
-            vault.reportWithdraw(address(this), _amountNeeded, profitForUser);
             emit WithdrawedFromStrategy(address(this), amountFreed);
         }
     }
