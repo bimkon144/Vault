@@ -361,7 +361,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
         } else {
             withdrawingAssets = _requestedAssets;
         }
-
         _burn(_owner, _shares);
 
         emit Withdraw(
@@ -372,7 +371,6 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
             _shares,
             withdrawingAssets
         );
-
         asset.safeTransfer(_receiver, withdrawingAssets);
     }
 
@@ -426,7 +424,7 @@ contract Vault is ERC20, IVault, ReentrancyGuard {
 
             //withdrawingAssets includes personal amount of the tokens depends on loss/profit of the user
             //each strategy make report themselves
-            (loss, withdrawedAmount) = IStrategy(strategy).withdraw(
+            (withdrawedAmount, loss) = IStrategy(strategy).withdraw(
                 amountNeeded,
                 _redeemType
             );

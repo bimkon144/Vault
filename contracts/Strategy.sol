@@ -190,8 +190,7 @@ contract Strategy is IStrategy, ReentrancyGuard {
         if (amountOfCompToken > 0) {
             amountOut = swapExactInputSingle(amountOfCompToken);
         }
-        uint256 wantStrategyAmount = want.balanceOf(address(this));
-        _amountFreed = wantStrategyAmount + amountOut;
+        _amountFreed = want.balanceOf(address(this));
     }
 
     function prepareReturn() internal returns (uint256 _profit, uint256 _loss) {
@@ -286,6 +285,7 @@ contract Strategy is IStrategy, ReentrancyGuard {
             uint256 totalAssetsOnCompound = cToken.balanceOfUnderlying(
                 address(this)
             ) + totalRewards;
+
             uint256 totalStrategyDebt = vault.debtOutstanding(address(this));
             //calculate total profit loss of the strategy and sync with the vault
             (_profit, _loss) = calculateProfitLoss(

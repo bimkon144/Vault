@@ -2,16 +2,17 @@ require("@nomiclabs/hardhat-waffle");
 const { expect } = require("chai");
 
 describe("Strategy", () => {
+  let decimals = Math.pow(10, 18);
+  let decimalsBigInt = 10n ** 18n;
   let owner;
   let user;
   let vault;
   let underlying;
   let cToken;
-  let comp;
+  let compToken;
   let underlyingAddress;
   let cTokenAddress;
-  let decimals = Math.pow(10, 18);
-  let decimalsBigInt = 10n ** 18n;
+
 
   const impersonateAddress = async (address) => {
     const hre = require('hardhat');
@@ -48,7 +49,7 @@ describe("Strategy", () => {
 
     compAddress = '0xc00e94Cb662C3520282E6f5717214004A7f26888';
     const abi2 = require('../contracts/abi/Comp.json');
-    comp = new ethers.Contract(compAddress, abi2, owner);
+    compToken = new ethers.Contract(compAddress, abi2, owner);
 
     const Vault = await ethers.getContractFactory("Vault");
     vault = await Vault.deploy("SharedToken", "STK", owner.address, underlyingAddress);
@@ -58,15 +59,17 @@ describe("Strategy", () => {
     strategy = await Strategy.deploy(vault.address, "DaiFarming", owner.address);
     await strategy.deployed();
     await vault.addStrategy(strategy.address, 1000);
+
     // impersonate rich user address to send some dai to the owner
     richUser = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
     await underlying.connect(richUser).transfer(owner.address, (5000n * decimalsBigInt));
     await underlying.approve(vault.address, (5000n * decimalsBigInt));
-    await vault.deposit((5000n * decimalsBigInt).toString(), owner.address);
+    await vault.deposit((5000n * decimalsBigInt), owner.address);
     await strategy.harvest();
   });
+  
 
-  it("added liquidity in DAI to Compound protocol and mint cDai back to strategy", async  () => {
+  it("add liquidity in DAI to Compound protocol and mint cDai back to strategy", async  () => {
     expect(Math.round(await cToken.balanceOf(strategy.address) / Math.pow(10, 8))).eq(227714);
     expect(Math.round(await cToken.callStatic.balanceOfUnderlying(strategy.address) / decimals)).eq(5000);
   });
@@ -81,62 +84,37 @@ describe("Strategy", () => {
     expect(await strategy.keeper()).to.equal(user.address);
   });
   
-  it("setKeeper should set Keeper address", async() => {
-    await strategy.setKeeper(user.address);
-    expect(await strategy.keeper()).to.equal(user.address);
+  it("setEmergencyExit should set emergencyExit to true and send all DAI to governance", async() => {
+    expect(Math.round(await underlying.balanceOf(owner.address) / Math.pow(10, 8))).to.equal(0);
+    await strategy.setEmergencyExit();
+    expect(Math.round(await underlying.balanceOf(owner.address) / Math.pow(10, 8))).to.equal(50000000552615);
+    expect(await strategy.emergencyExit()).to.equal(true);
   });
 
-  // it("call first harvest method that withdraw assets from vault and invest to the defi protocol", async () => {
-  //   const underlyingDecimals = 18;
-  //   signer = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
-  //   await underlying.connect(signer).transfer(owner.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-  //   await underlying.approve(vault.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-  //   await vault.deposit((10 * Math.pow(10, underlyingDecimals)).toString(), owner.address);
-  //   await strategy.harvest();
-  //   // expect(await underlying.balanceOf(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
-  //   // expect(await vault.debtOutstanding(strategy.address)).to.equal((10 * Math.pow(10, underlyingDecimals)).toString());
-  //   // await strategy.supplyErc20ToCompound(
-  //   //   underlyingAddress,
-  //   //   cTokenAddress,
-  //   //   (10 * Math.pow(10, underlyingDecimals)).toString() 
-  //   // );
+  it("toggleStrategyPause should set strategyPause to true and send all DAI to strategy", async() => {
+    expect(Math.round(await underlying.balanceOf(strategy.address) / Math.pow(10, 8))).to.equal(0);
+    await strategy.toggleStrategyPause();
+    expect(Math.round(await underlying.balanceOf(strategy.address) / Math.pow(10, 8))).to.equal(50000000552615);
+    expect(await strategy.strategyPause()).to.equal(true);
+    //unpause send all DAI to defi protocol
+    await strategy.toggleStrategyPause();
+    expect(await strategy.strategyPause()).to.equal(false);
+    expect(Math.round(await underlying.balanceOf(strategy.address) / Math.pow(10, 8))).to.equal(0);
+  });
 
-  //   let balanceOfUnderlying = await cToken.callStatic
-  //     .balanceOfUnderlying(strategy.address) / Math.pow(10, underlyingDecimals);
-  //   console.log(` supplied to the Compound Protocol:`, balanceOfUnderlying);
 
-  //   let cTokenBalance = await cToken.callStatic.balanceOf(strategy.address);
-  //   console.log(`Strategy's  Token Balance:`, +cTokenBalance / 1e8);
+  it("should withdraw assets from strategy", async () => {
+    expect(await underlying.balanceOf(owner.address) / 1e18).to.equal(0);
+    await vault.withdraw((2000n * decimalsBigInt), owner.address, owner.address);
+    expect(await underlying.balanceOf(owner.address) / 1e18).to.equal(2000.00002208423);
+  });
 
-  //   expect(balanceOfUnderlying).to.equal(9.999999999781632);
-  //   expect(+cTokenBalance / 1e8).to.equal(455.42830343);
-  //   // await strategy.prepareReturn();
-  //   // expect(await strategy.balanceOfComp() / 1e18).to.equal(2.04928259e-10);
-  //   const balanceOfComp = await comp.balanceOf(strategy.address);
-  //   // expect(balanceOfComp).to.equal(204928259);
-  //   expect(await underlying.balanceOf(strategy.address)).to.equal(0);
-  //   // await strategy.swapExactInputSingle(balanceOfComp);
-  //   expect(await comp.balanceOf(strategy.address) / 1e18).to.equal(0);
-  //   // expect(await underlying.balanceOf(strategy.address) / Math.pow(10, underlyingDecimals)).to.equal(1.01869262e-10);
-  //   expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10);
-  //   await strategy.harvest();
-  //   // expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10.000000065581547);
-  // });
-
-  // it("should withdraw assets from strategy", async () => {
-  //   const underlyingDecimals = 18;
-  //   signer = await impersonateAddress("0x7182A1B9CF88e87b83E936d3553c91f9E7BeBDD7");
-  //   await underlying.connect(signer).transfer(owner.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-  //   await underlying.approve(vault.address, (10 * Math.pow(10, underlyingDecimals)).toString());
-  //   await vault.deposit((10 * Math.pow(10, underlyingDecimals)).toString(), owner.address);
-  //   const tx = await strategy.harvest();
-  //   expect(await vault.balanceOf(owner.address) / 1e18).to.equal(10);
-  //   const assets = (5 * Math.pow(10, underlyingDecimals)).toString();
-  //   await tx.wait(1);
-  //   expect(await underlying.balanceOf(owner.address) / 1e18).to.equal(0);
-  //   await vault.withdraw(assets, owner.address, owner.address);
-  //   expect(await underlying.balanceOf(owner.address) / 1e18).to.equal(5.0000000551017845);
-  // });
+  it("should redeem assets depends on shares amount", async () => {
+    //check that we have 5000 minted share tokens
+    expect(await vault.balanceOf(owner.address) / 1e18).to.equal(5000);
+    await vault.redeem((5000n * decimalsBigInt), owner.address, owner.address);
+    expect(await vault.balanceOf(owner.address) / 1e18).to.equal(0);
+  });
 
 
 
