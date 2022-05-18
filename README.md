@@ -5,4 +5,6 @@
 * Run Strategy tests ```npx hardhat test test/strategy.test.js``` 
 * Run Vault tests ```npx hardhat test test/vault.test.js```
 * Run forked mainnet node ```npx hardhat node --network hardhat```
+* Run test coverage ```npx hardhat coverage```
+* Run prettier  ```npm run prettier```
 
